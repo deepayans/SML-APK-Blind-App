@@ -2,133 +2,85 @@ import 'dart:typed_data';
 import 'model_downloader.dart';
 import 'mlc_inference.dart';
 
+/// Wraps the MLC LLM inference channel to provide image analysis.
+///
+/// Renamed class kept as [GemmaService] to avoid cascading file renames,
+/// but now backed by MiniCPM-V — a real Vision-Language Model that understands
+/// both the image and the text prompt simultaneously.
+///
+/// Key fixes vs the original:
+///   - No silent fallback to canned demo strings.
+///     If inference fails the error propagates so the UI can tell the user.
+///   - Prompt building delegated to [_buildPrompt] as before, but these
+///     prompts are now actually processed against the real image.
+///   - [_mlcInference.isLoaded] is the sole gate; the demo path is gone.
 class GemmaService {
   final MlcInference _mlcInference = MlcInference();
   bool _isLoaded = false;
-  
+
   bool get isLoaded => _isLoaded;
 
-  Future<bool> needsModelDownload() async {
-    return !(await ModelDownloader.isModelDownloaded());
-  }
+  Future<bool> needsModelDownload() async =>
+      !(await ModelDownloader.isModelDownloaded());
 
   Future<void> loadModel() async {
-    try {
-      // Check if model files exist
-      if (await needsModelDownload()) {
-        throw Exception('Model not downloaded');
-      }
-      
-      // Get model path
-      final modelPath = await ModelDownloader.getModelPath();
-      
-      // Load into MLC engine
-      final loaded = await _mlcInference.loadModel(modelPath);
-      
-      if (loaded) {
-        _isLoaded = true;
-        print('Model loaded successfully from: $modelPath');
-      } else {
-        throw Exception('Failed to load model');
-      }
-    } catch (e) {
-      print('Model loading error: $e');
-      // Fall back to demo mode
-      _isLoaded = true;
+    if (await needsModelDownload()) {
+      throw Exception(
+          'Model not downloaded. Download it first via the setup screen.');
     }
+
+    final modelPath = await ModelDownloader.getModelPath();
+    final loaded = await _mlcInference.loadModel(modelPath);
+
+    if (!loaded) {
+      // loadModel returns false only when the platform channel itself fails
+      // (e.g. wrong ABI, missing .so).  Throw a clear message.
+      throw Exception(
+          'MLCEngine failed to load the model from $modelPath. '
+          'Ensure the compiled .so is present and the device is arm64.');
+    }
+
+    _isLoaded = true;
   }
 
+  /// Analyse [imageBytes] according to [mode].
+  ///
+  /// Throws on failure — the caller ([AssistantProvider]) catches and
+  /// surfaces the error to the user via TTS + status text.
   Future<String> analyzeImage(Uint8List imageBytes, String mode) async {
-    if (!_isLoaded) throw Exception("Model not loaded");
-
-    // Build prompt based on mode
-    final prompt = _buildPrompt(mode);
-    
-    try {
-      // Try real inference first
-      if (_mlcInference.isLoaded) {
-        return await _mlcInference.analyzeImage(imageBytes, prompt);
-      }
-    } catch (e) {
-      print('MLC inference failed, using fallback: $e');
+    if (!_isLoaded) throw Exception('Model not loaded. Call loadModel() first.');
+    if (!_mlcInference.isLoaded) {
+      throw Exception('Native MLC engine not ready.');
     }
-    
-    // Fallback to demo responses
-    return _generateDemoResponse(imageBytes, mode);
+
+    final prompt = _buildPrompt(mode);
+    return await _mlcInference.analyzeImage(imageBytes, prompt);
   }
 
   String _buildPrompt(String mode) {
     switch (mode.toLowerCase()) {
       case 'scene':
-        return 'Describe this scene in detail for a visually impaired person. Include objects, their positions, lighting, and any potential hazards.';
+        return 'Describe this scene in detail for a visually impaired person. '
+            'Include all visible objects, their positions (left, right, centre, '
+            'near, far), lighting conditions, and any potential hazards.';
       case 'navigation':
-        return 'Analyze this image for navigation. Identify the path ahead, any obstacles, distances, and give clear walking directions.';
+        return 'Analyse this image for safe navigation. Identify the clear path '
+            'ahead, any obstacles or hazards with their positions and approximate '
+            'distances, and give concise walking directions.';
       case 'text':
-        return 'Read and transcribe any text visible in this image. Include signs, labels, documents, or screens.';
+        return 'Read and transcribe every piece of text visible in this image. '
+            'Include signs, labels, screens, documents, and handwriting.';
       case 'objects':
-        return 'List all objects in this image with their approximate positions (left, center, right, near, far).';
+        return 'List every distinct object visible in this image. '
+            'For each, state its approximate position (left/centre/right, '
+            'near/far) and a brief description.';
       case 'quick':
-        return 'Give a brief one-sentence summary of what is in this image.';
+        return 'In one or two sentences, tell a blind person the single most '
+            'important thing they need to know about this image right now.';
       default:
         return 'Describe what you see in this image for someone who cannot see it.';
     }
   }
-
-  String _generateDemoResponse(Uint8List imageBytes, String mode) {
-    int hash = 0;
-    for (int i = 0; i < imageBytes.length && i < 1000; i += 100) {
-      hash = (hash + imageBytes[i]) % 10;
-    }
-
-    switch (mode.toLowerCase()) {
-      case 'scene':
-        return _scene[hash % _scene.length];
-      case 'navigation':
-        return _nav[hash % _nav.length];
-      case 'text':
-        return _text[hash % _text.length];
-      case 'objects':
-        return _obj[hash % _obj.length];
-      case 'quick':
-        return _quick[hash % _quick.length];
-      default:
-        return _scene[hash % _scene.length];
-    }
-  }
-
-  static const _scene = [
-    "Indoor space with furniture. Natural light from window. Floor clear for walking. No obstacles ahead.",
-    "Outdoor setting, possibly a street. Path clear for 3-4 meters. Objects on your right side.",
-    "Public space with multiple objects. Bright lighting. Proceed slowly.",
-    "Kitchen area with counters and appliances. Limited floor space.",
-    "Office environment with desks and chairs. Clear pathways between furniture.",
-  ];
-
-  static const _nav = [
-    "Path clear for 3 meters. Object 1.5 meters ahead on right. Continue straight or veer left.",
-    "Warning: Obstacle 1 meter ahead at waist height. Clear path on left side.",
-    "Path mostly clear. Floor texture change 2 meters ahead may indicate doorway.",
-    "Open space. No obstacles in next 4 meters. Move slowly.",
-  ];
-
-  static const _text = [
-    "Text detected in upper portion. Hold camera steady for better reading.",
-    "Sign or label visible in center. Move closer for accuracy.",
-    "Limited text visible. Try moving closer.",
-  ];
-
-  static const _obj = [
-    "Large object center, 2m away. Smaller objects on right. Wall on left. Floor smooth.",
-    "Person center-right. Tables or counters present. Ground-level items detected.",
-    "Seating center, 1.5m away. Shelving against wall. Path clear on left.",
-  ];
-
-  static const _quick = [
-    "Indoor, furniture, clear path, moderate light.",
-    "Outdoor, obstacles present, proceed cautiously.",
-    "Enclosed space, multiple objects, limited paths.",
-    "Well-lit, people may be present, main path clear.",
-  ];
 
   void dispose() {
     _mlcInference.unloadModel();

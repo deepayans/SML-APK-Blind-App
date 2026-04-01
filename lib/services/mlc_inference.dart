@@ -1,78 +1,89 @@
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
-/// Platform channel interface for MLC LLM native inference
+/// Dart-side platform channel that talks to [MlcLlmPlugin] on the Android side.
+///
+/// All methods surface real errors instead of returning false/null silently,
+/// so failures propagate up to the UI layer.
 class MlcInference {
   static const MethodChannel _channel = MethodChannel('mlc_llm_channel');
-  
+
   bool _isLoaded = false;
   bool get isLoaded => _isLoaded;
 
-  /// Load the model from the given path
+  /// Load the MLC model from [modelPath].
+  ///
+  /// Returns true on success. Throws [Exception] on any failure so the caller
+  /// gets a clear message rather than silently falling back to demo mode.
   Future<bool> loadModel(String modelPath) async {
     try {
-      final result = await _channel.invokeMethod('loadModel', {
+      final result = await _channel.invokeMethod<bool>('loadModel', {
         'modelPath': modelPath,
       });
       _isLoaded = result == true;
       return _isLoaded;
     } on PlatformException catch (e) {
-      print('Failed to load model: ${e.message}');
-      return false;
+      _isLoaded = false;
+      throw Exception('loadModel failed [${e.code}]: ${e.message}');
     }
   }
 
-  /// Analyze image and return description
+  /// Send [imageBytes] (JPEG from the camera) and [prompt] to the native
+  /// MLC engine for vision inference.
+  ///
+  /// Returns the model's text response. Throws on failure.
   Future<String> analyzeImage(Uint8List imageBytes, String prompt) async {
     if (!_isLoaded) {
-      throw Exception('Model not loaded');
+      throw Exception('Model not loaded. Call loadModel() first.');
     }
-    
     try {
-      final result = await _channel.invokeMethod('analyzeImage', {
+      final result = await _channel.invokeMethod<String>('analyzeImage', {
         'imageBytes': imageBytes,
         'prompt': prompt,
       });
-      return result as String;
+      if (result == null || result.isEmpty) {
+        throw Exception('Empty response from inference engine.');
+      }
+      return result;
     } on PlatformException catch (e) {
-      throw Exception('Inference failed: ${e.message}');
+      throw Exception('analyzeImage failed [${e.code}]: ${e.message}');
     }
   }
 
-  /// Generate text response
+  /// Generate text from [prompt] without an image (for voice commands, etc.).
   Future<String> generateText(String prompt) async {
     if (!_isLoaded) {
-      throw Exception('Model not loaded');
+      throw Exception('Model not loaded. Call loadModel() first.');
     }
-    
     try {
-      final result = await _channel.invokeMethod('generateText', {
+      final result = await _channel.invokeMethod<String>('generateText', {
         'prompt': prompt,
       });
-      return result as String;
+      return result ?? '';
     } on PlatformException catch (e) {
-      throw Exception('Generation failed: ${e.message}');
+      throw Exception('generateText failed [${e.code}]: ${e.message}');
     }
   }
 
-  /// Check if model is loaded
+  /// Ask the native side whether the engine has a model loaded.
   Future<bool> checkModelLoaded() async {
     try {
-      final result = await _channel.invokeMethod('isModelLoaded');
+      final result = await _channel.invokeMethod<bool>('isModelLoaded');
       _isLoaded = result == true;
       return _isLoaded;
-    } catch (e) {
+    } catch (_) {
       return false;
     }
   }
 
-  /// Unload model to free memory
+  /// Unload the model to free RAM. Safe to call even if not loaded.
   Future<void> unloadModel() async {
     try {
       await _channel.invokeMethod('unloadModel');
+    } catch (_) {
+      // Best-effort unload; ignore errors.
+    } finally {
       _isLoaded = false;
-    } catch (e) {
-      print('Failed to unload model: $e');
     }
   }
 }

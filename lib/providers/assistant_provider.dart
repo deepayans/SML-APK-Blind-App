@@ -78,10 +78,18 @@ class AssistantProvider extends ChangeNotifier {
       
       await ttsService.speak(response);
     } catch (e) {
-      _statusMessage = 'Error: $e';
+      final msg = e.toString().replaceAll('Exception:', '').trim();
+      _statusMessage = 'Error: $msg';
       _isProcessing = false;
       notifyListeners();
-      await ttsService.speak('Error analyzing image. Please try again.');
+      // Speak a concise version of the error so the user knows what happened
+      if (msg.contains('not loaded') || msg.contains('loadModel')) {
+        await ttsService.speak('AI model is not ready yet. Please wait.');
+      } else if (msg.contains('not downloaded')) {
+        await ttsService.speak('Model not downloaded. Please check your connection and retry setup.');
+      } else {
+        await ttsService.speak('Could not analyse the image. Please try again.');
+      }
     }
   }
 
