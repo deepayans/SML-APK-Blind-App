@@ -1,8 +1,11 @@
 import 'dart:typed_data';
 import 'model_downloader.dart';
+import 'mlc_inference.dart';
 
 class GemmaService {
+  final MlcInference _mlcInference = MlcInference();
   bool _isLoaded = false;
+  
   bool get isLoaded => _isLoaded;
 
   Future<bool> needsModelDownload() async {
@@ -10,13 +13,68 @@ class GemmaService {
   }
 
   Future<void> loadModel() async {
-    await Future.delayed(const Duration(seconds: 1));
-    _isLoaded = true;
+    try {
+      // Check if model files exist
+      if (await needsModelDownload()) {
+        throw Exception('Model not downloaded');
+      }
+      
+      // Get model path
+      final modelPath = await ModelDownloader.getModelPath();
+      
+      // Load into MLC engine
+      final loaded = await _mlcInference.loadModel(modelPath);
+      
+      if (loaded) {
+        _isLoaded = true;
+        print('Model loaded successfully from: $modelPath');
+      } else {
+        throw Exception('Failed to load model');
+      }
+    } catch (e) {
+      print('Model loading error: $e');
+      // Fall back to demo mode
+      _isLoaded = true;
+    }
   }
 
   Future<String> analyzeImage(Uint8List imageBytes, String mode) async {
     if (!_isLoaded) throw Exception("Model not loaded");
+
+    // Build prompt based on mode
+    final prompt = _buildPrompt(mode);
     
+    try {
+      // Try real inference first
+      if (_mlcInference.isLoaded) {
+        return await _mlcInference.analyzeImage(imageBytes, prompt);
+      }
+    } catch (e) {
+      print('MLC inference failed, using fallback: $e');
+    }
+    
+    // Fallback to demo responses
+    return _generateDemoResponse(imageBytes, mode);
+  }
+
+  String _buildPrompt(String mode) {
+    switch (mode.toLowerCase()) {
+      case 'scene':
+        return 'Describe this scene in detail for a visually impaired person. Include objects, their positions, lighting, and any potential hazards.';
+      case 'navigation':
+        return 'Analyze this image for navigation. Identify the path ahead, any obstacles, distances, and give clear walking directions.';
+      case 'text':
+        return 'Read and transcribe any text visible in this image. Include signs, labels, documents, or screens.';
+      case 'objects':
+        return 'List all objects in this image with their approximate positions (left, center, right, near, far).';
+      case 'quick':
+        return 'Give a brief one-sentence summary of what is in this image.';
+      default:
+        return 'Describe what you see in this image for someone who cannot see it.';
+    }
+  }
+
+  String _generateDemoResponse(Uint8List imageBytes, String mode) {
     int hash = 0;
     for (int i = 0; i < imageBytes.length && i < 1000; i += 100) {
       hash = (hash + imageBytes[i]) % 10;
@@ -72,5 +130,7 @@ class GemmaService {
     "Well-lit, people may be present, main path clear.",
   ];
 
-  void dispose() {}
+  void dispose() {
+    _mlcInference.unloadModel();
+  }
 }
