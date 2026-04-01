@@ -54,7 +54,7 @@ class StatusDisplay extends StatelessWidget {
                         color: Colors.white.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(20)),
                     child: Text(
-                      "${lastResult!.mode.icon} ${lastResult!.mode.displayName}  •  ${lastResult!.timeAgo}",
+                      "${lastResult!.mode.name}  •  ${lastResult!.timeAgo}",
                       style: const TextStyle(
                           fontSize: 14, color: Colors.white70),
                     ),
