@@ -1,50 +1,49 @@
 import 'package:speech_to_text/speech_to_text.dart';
-import 'package:speech_to_text/speech_recognition_result.dart';
 
-class STTService {
+class SttService {
   final SpeechToText _stt = SpeechToText();
   bool _isInitialized = false;
   bool _isListening = false;
 
-  bool get isInitialized => _isInitialized;
   bool get isListening => _isListening;
 
-  Future<void> initialize() async {
-    _isInitialized = await _stt.initialize(
-      onError: (error) => _isListening = false,
-      onStatus: (status) {
-        if (status == 'done' || status == 'notListening') _isListening = false;
-      },
-    );
+  Future<bool> initialize() async {
+    if (_isInitialized) return true;
+    _isInitialized = await _stt.initialize();
+    return _isInitialized;
   }
 
-  Future<void> startListening(Function(String) onResult) async {
-    if (!_isInitialized) await initialize();
-    if (_isListening) return;
+  Future<void> startListening({
+    required Function(String) onResult,
+    Function()? onDone,
+  }) async {
+    if (!_isInitialized) {
+      final success = await initialize();
+      if (!success) return;
+    }
 
     _isListening = true;
-
+    
     await _stt.listen(
-      onResult: (SpeechRecognitionResult result) {
+      onResult: (result) {
         if (result.finalResult) {
-          _isListening = false;
           onResult(result.recognizedWords);
+          _isListening = false;
+          onDone?.call();
         }
       },
       listenFor: const Duration(seconds: 10),
       pauseFor: const Duration(seconds: 3),
-      partialResults: false,
-      cancelOnError: true,
+      localeId: 'en_US',
     );
   }
 
-  void stopListening() {
-    _stt.stop();
+  Future<void> stopListening() async {
     _isListening = false;
+    await _stt.stop();
   }
 
   void dispose() {
     _stt.stop();
-    _stt.cancel();
   }
 }
