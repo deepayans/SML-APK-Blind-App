@@ -1,36 +1,35 @@
 import 'package:flutter_tts/flutter_tts.dart';
 
-class TTSService {
+class TtsService {
   final FlutterTts _tts = FlutterTts();
-  bool _isSpeaking = false;
-
-  bool get isSpeaking => _isSpeaking;
+  bool _isInitialized = false;
 
   Future<void> initialize() async {
-    await _tts.setLanguage("en-US");
-    await _tts.setSpeechRate(0.45);
+    if (_isInitialized) return;
+    
+    await _tts.setLanguage('en-US');
+    await _tts.setSpeechRate(0.5);
     await _tts.setVolume(1.0);
     await _tts.setPitch(1.0);
-
-    _tts.setCompletionHandler(() => _isSpeaking = false);
-    _tts.setCancelHandler(() => _isSpeaking = false);
-    _tts.setErrorHandler((message) => _isSpeaking = false);
+    
+    _isInitialized = true;
   }
 
   Future<void> speak(String text) async {
-    if (text.isEmpty) return;
-    await stop();
-    _isSpeaking = true;
+    if (!_isInitialized) await initialize();
+    await _tts.stop();
     await _tts.speak(text);
   }
 
   Future<void> stop() async {
-    _isSpeaking = false;
     await _tts.stop();
   }
 
-  Future<void> setRate(double rate) async => await _tts.setSpeechRate(rate.clamp(0.1, 1.0));
-  Future<void> setVolume(double volume) async => await _tts.setVolume(volume.clamp(0.0, 1.0));
+  Future<void> setSpeechRate(double rate) async {
+    await _tts.setSpeechRate(rate);
+  }
 
-  void dispose() => _tts.stop();
+  void dispose() {
+    _tts.stop();
+  }
 }
