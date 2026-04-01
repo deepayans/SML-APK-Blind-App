@@ -1,158 +1,262 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:provider/provider.dart';
 import 'package:camera/camera.dart';
-
+import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/assistant_provider.dart';
-import '../models/assistant_mode.dart';
-import '../theme/app_theme.dart';
-import '../widgets/mode_selector.dart';
-import '../widgets/status_display.dart';
-import '../widgets/capture_button.dart';
-import 'settings_screen.dart';
-import 'history_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  CameraController? _cameraController;
+  bool _isCameraReady = false;
+  bool _isInitializing = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeAll();
+  }
+
+  Future<void> _initializeAll() async {
+    await _requestPermissions();
+    await _initializeCamera();
+    
+    if (mounted) {
+      await context.read<AssistantProvider>().initialize();
+      setState(() => _isInitializing = false);
+    }
+  }
+
+  Future<void> _requestPermissions() async {
+    await [
+      Permission.camera,
+      Permission.microphone,
+    ].request();
+  }
+
+  Future<void> _initializeCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) return;
+
+      final backCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      _cameraController = CameraController(
+        backCamera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+      );
+
+      await _cameraController!.initialize();
+      
+      if (mounted) {
+        setState(() => _isCameraReady = true);
+      }
+    } catch (e) {
+      debugPrint('Camera error: $e');
+    }
+  }
+
+  Future<void> _captureAndAnalyze() async {
+    if (!_isCameraReady || _cameraController == null) return;
+    
+    final provider = context.read<AssistantProvider>();
+    if (provider.isProcessing) return;
+
+    try {
+      final image = await _cameraController!.takePicture();
+      final bytes = await image.readAsBytes();
+      await provider.analyzeImage(bytes);
+    } catch (e) {
+      debugPrint('Capture error: $e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _cameraController?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Consumer<AssistantProvider>(
-      builder: (context, provider, child) {
-        return Scaffold(
-          body: GestureDetector(
-            onTap: () {
-              if (provider.isReady && !provider.isProcessing) {
-                provider.captureAndAnalyze();
-              }
-            },
-            onDoubleTap: () => provider.cycleMode(),
-            onLongPress: () {
-              if (!provider.isListening) provider.startListening();
-            },
-            onLongPressEnd: (_) {
-              if (provider.isListening) provider.stopListening();
-            },
-            onHorizontalDragEnd: (details) {
-              if (details.primaryVelocity != null) {
-                if (details.primaryVelocity! > 0) {
-                  final modes = AssistantMode.values;
-                  final currentIndex = modes.indexOf(provider.mode);
-                  final prevIndex = (currentIndex - 1 + modes.length) % modes.length;
-                  provider.setMode(modes[prevIndex]);
-                } else {
-                  provider.cycleMode();
-                }
-              }
-            },
-            child: Stack(
-              children: [
-                if (provider.isCameraInitialized)
-                  Positioned.fill(
-                    child: Opacity(
-                      opacity: 0.2,
-                      child: CameraPreview(provider.cameraController),
+    return Scaffold(
+      body: Consumer<AssistantProvider>(
+        builder: (context, provider, child) {
+          if (_isInitializing) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Initializing...', style: TextStyle(color: Colors.white70)),
+                ],
+              ),
+            );
+          }
+
+          return Stack(
+            children: [
+              // Camera preview
+              if (_isCameraReady && _cameraController != null)
+                Positioned.fill(
+                  child: CameraPreview(_cameraController!),
+                )
+              else
+                const Positioned.fill(
+                  child: ColoredBox(
+                    color: Colors.black,
+                    child: Center(
+                      child: Icon(Icons.camera_alt, size: 64, color: Colors.white30),
                     ),
                   ),
-                SafeArea(
-                  child: Column(
+                ),
+
+              // Touch to capture overlay
+              Positioned.fill(
+                child: GestureDetector(
+                  onTap: _captureAndAnalyze,
+                  onDoubleTap: provider.repeatLastResponse,
+                  onLongPress: provider.startVoiceCommand,
+                  child: Container(color: Colors.transparent),
+                ),
+              ),
+
+              // Top status bar
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.of(context).padding.top + 8,
+                    left: 16,
+                    right: 16,
+                    bottom: 8,
+                  ),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.black87, Colors.transparent],
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      _buildTopBar(context, provider),
-                      ModeSelector(
-                        currentMode: provider.mode,
-                        onModeChanged: provider.setMode,
-                      ),
-                      Expanded(
-                        child: StatusDisplay(
-                          statusMessage: provider.statusMessage,
-                          isProcessing: provider.isProcessing,
-                          isListening: provider.isListening,
-                          lastResult: provider.lastResult,
+                      const Text(
+                        'Vision Assistant',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                      _buildInstructions(context),
-                      const SizedBox(height: 100),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: provider.isProcessing ? Colors.orange : Colors.green,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Text(
+                          provider.isProcessing ? 'Processing...' : 'Ready',
+                          style: const TextStyle(color: Colors.white, fontSize: 12),
+                        ),
+                      ),
                     ],
                   ),
                 ),
-                Positioned(
-                  bottom: 24,
-                  left: 0,
-                  right: 0,
-                  child: Center(
-                    child: CaptureButton(
-                      isProcessing: provider.isProcessing,
-                      isListening: provider.isListening,
-                      onPressed: provider.captureAndAnalyze,
-                      onLongPress: provider.startListening,
+              ),
+
+              // Bottom controls
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: Container(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).padding.bottom + 16,
+                    top: 16,
+                    left: 16,
+                    right: 16,
+                  ),
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.bottomCenter,
+                      end: Alignment.topCenter,
+                      colors: [Colors.black87, Colors.transparent],
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Mode selector
+                      SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          children: AssistantMode.values.map((mode) {
+                            final isSelected = provider.currentMode == mode;
+                            final modeName = mode.name[0].toUpperCase() + mode.name.substring(1);
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: ChoiceChip(
+                                label: Text(modeName),
+                                selected: isSelected,
+                                onSelected: (_) => provider.setMode(mode),
+                                selectedColor: Colors.blue,
+                                backgroundColor: Colors.grey[800],
+                                labelStyle: TextStyle(
+                                  color: isSelected ? Colors.white : Colors.white70,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      // Instructions
+                      const Text(
+                        'Tap: Analyze | Double-tap: Repeat | Hold: Voice',
+                        style: TextStyle(color: Colors.white54, fontSize: 12),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Processing overlay
+              if (provider.isProcessing)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.black54,
+                    child: const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          CircularProgressIndicator(color: Colors.white),
+                          SizedBox(height: 16),
+                          Text(
+                            'Analyzing...',
+                            style: TextStyle(color: Colors.white, fontSize: 18),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-                if (provider.isListening) _buildListeningOverlay(context),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildTopBar(BuildContext context, AssistantProvider provider) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.history, size: 32),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const HistoryScreen())),
-          ),
-          const Text("Vision Assistant",
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          IconButton(
-            icon: const Icon(Icons.settings, size: 32),
-            onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInstructions(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      child: Text(
-        "TAP: Describe  •  DOUBLE-TAP: Mode  •  HOLD: Voice\nSWIPE: Change mode",
-        style: TextStyle(fontSize: 14, color: Colors.white.withOpacity(0.7)),
-        textAlign: TextAlign.center,
-      ),
-    );
-  }
-
-  Widget _buildListeningOverlay(BuildContext context) {
-    return Container(
-      color: Colors.black.withOpacity(0.8),
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 120,
-              height: 120,
-              decoration: const BoxDecoration(
-                  color: AppTheme.primaryColor, shape: BoxShape.circle),
-              child: const Icon(Icons.mic, size: 60, color: Colors.white),
-            ),
-            const SizedBox(height: 24),
-            const Text("Listening...",
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            Text("Say a command",
-                style: TextStyle(fontSize: 18, color: Colors.white.withOpacity(0.8))),
-          ],
-        ),
+            ],
+          );
+        },
       ),
     );
   }
