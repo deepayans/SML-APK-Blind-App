@@ -1,58 +1,87 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:camera/camera.dart';
-
+import 'services/model_downloader.dart';
+import 'services/gemma_service.dart';
+import 'services/tts_service.dart';
+import 'services/stt_service.dart';
 import 'providers/assistant_provider.dart';
 import 'screens/home_screen.dart';
-import 'screens/onboarding_screen.dart';
-import 'services/preferences_service.dart';
-import 'theme/app_theme.dart';
-
-late List<CameraDescription> cameras;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-  ]);
-
-  cameras = await availableCameras();
-
-  final prefs = PreferencesService();
-  await prefs.init();
-  final onboardingComplete = prefs.isOnboardingComplete;
-
-  runApp(VisionAssistantApp(
-    showOnboarding: !onboardingComplete,
-  ));
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  runApp(const VisionAssistantApp());
 }
 
 class VisionAssistantApp extends StatelessWidget {
-  final bool showOnboarding;
-
-  const VisionAssistantApp({
-    super.key,
-    this.showOnboarding = false,
-  });
+  const VisionAssistantApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(
-          create: (_) => AssistantProvider(cameras: cameras),
+        Provider<GemmaService>(create: (_) => GemmaService()),
+        Provider<TtsService>(create: (_) => TtsService()),
+        Provider<SttService>(create: (_) => SttService()),
+        ChangeNotifierProxyProvider3<GemmaService, TtsService, SttService, AssistantProvider>(
+          create: (ctx) => AssistantProvider(gemmaService: ctx.read<GemmaService>(), ttsService: ctx.read<TtsService>(), sttService: ctx.read<SttService>()),
+          update: (ctx, g, t, s, prev) => prev ?? AssistantProvider(gemmaService: g, ttsService: t, sttService: s),
         ),
       ],
       child: MaterialApp(
         title: 'Vision Assistant',
+        theme: ThemeData.dark().copyWith(colorScheme: ColorScheme.dark(primary: Colors.blue)),
         debugShowCheckedModeBanner: false,
-        theme: AppTheme.darkTheme,
-        home: showOnboarding
-            ? const OnboardingScreen()
-            : const HomeScreen(),
+        home: const AppStartup(),
       ),
     );
   }
 }
+
+class AppStartup extends StatefulWidget {
+  const AppStartup({super.key});
+  @override
+  State<AppStartup> createState() => _AppStartupState();
+}
+
+class _AppStartupState extends State<AppStartup> {
+  bool _checking = true;
+  bool _needsDownload = false;
+
+  @override
+  void initState() { super.initState(); _check(); }
+
+  Future<void> _check() async {
+    final needs = !(await ModelDownloader.isModelDownloaded());
+    if (!mounted) return;
+    if (needs) { setState(() { _checking = false; _needsDownload = true; }); }
+    else { _goHome(); }
+  }
+
+  void _goHome() => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checking) return const Scaffold(backgroundColor: Color(0xFF121212), body: Center(child: CircularProgressIndicator()));
+    if (_needsDownload) return ModelDownloadScreen(onComplete: _goHome);
+    return const HomeScreen();
+  }
+}
+
+
+=====================================================
+END OF FILES
+=====================================================
+
+HOW TO USE:
+1. Open your GitHub repo: https://github.com/deepayans/SML-APK-Blind-App
+2. Edit each file and paste the corresponding code from above
+3. Commit changes
+4. GitHub Actions will build new APK automatically
+
+Files to update:
+- pubspec.yaml (root folder)
+- lib/services/model_downloader.dart (create new file)
+- lib/services/gemma_service.dart (replace existing)
+- lib/main.dart (replace existing)
