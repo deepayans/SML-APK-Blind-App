@@ -25,13 +25,23 @@ class VisionAssistantApp extends StatelessWidget {
         Provider<TtsService>(create: (_) => TtsService()),
         Provider<SttService>(create: (_) => SttService()),
         ChangeNotifierProxyProvider3<GemmaService, TtsService, SttService, AssistantProvider>(
-          create: (ctx) => AssistantProvider(gemmaService: ctx.read<GemmaService>(), ttsService: ctx.read<TtsService>(), sttService: ctx.read<SttService>()),
-          update: (ctx, g, t, s, prev) => prev ?? AssistantProvider(gemmaService: g, ttsService: t, sttService: s),
+          create: (ctx) => AssistantProvider(
+            gemmaService: ctx.read<GemmaService>(),
+            ttsService: ctx.read<TtsService>(),
+            sttService: ctx.read<SttService>(),
+          ),
+          update: (ctx, g, t, s, prev) => prev ?? AssistantProvider(
+            gemmaService: g,
+            ttsService: t,
+            sttService: s,
+          ),
         ),
       ],
       child: MaterialApp(
         title: 'Vision Assistant',
-        theme: ThemeData.dark().copyWith(colorScheme: ColorScheme.dark(primary: Colors.blue)),
+        theme: ThemeData.dark().copyWith(
+          colorScheme: const ColorScheme.dark(primary: Colors.blue),
+        ),
         debugShowCheckedModeBanner: false,
         home: const AppStartup(),
       ),
@@ -41,6 +51,7 @@ class VisionAssistantApp extends StatelessWidget {
 
 class AppStartup extends StatefulWidget {
   const AppStartup({super.key});
+
   @override
   State<AppStartup> createState() => _AppStartupState();
 }
@@ -50,38 +61,41 @@ class _AppStartupState extends State<AppStartup> {
   bool _needsDownload = false;
 
   @override
-  void initState() { super.initState(); _check(); }
-
-  Future<void> _check() async {
-    final needs = !(await ModelDownloader.isModelDownloaded());
-    if (!mounted) return;
-    if (needs) { setState(() { _checking = false; _needsDownload = true; }); }
-    else { _goHome(); }
+  void initState() {
+    super.initState();
+    _checkModel();
   }
 
-  void _goHome() => Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => const HomeScreen()));
+  Future<void> _checkModel() async {
+    final needs = !(await ModelDownloader.isModelDownloaded());
+    if (!mounted) return;
+    if (needs) {
+      setState(() {
+        _checking = false;
+        _needsDownload = true;
+      });
+    } else {
+      _goHome();
+    }
+  }
+
+  void _goHome() {
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (_checking) return const Scaffold(backgroundColor: Color(0xFF121212), body: Center(child: CircularProgressIndicator()));
-    if (_needsDownload) return ModelDownloadScreen(onComplete: _goHome);
+    if (_checking) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF121212),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_needsDownload) {
+      return ModelDownloadScreen(onComplete: _goHome);
+    }
     return const HomeScreen();
   }
 }
-
-
-=====================================================
-END OF FILES
-=====================================================
-
-HOW TO USE:
-1. Open your GitHub repo: https://github.com/deepayans/SML-APK-Blind-App
-2. Edit each file and paste the corresponding code from above
-3. Commit changes
-4. GitHub Actions will build new APK automatically
-
-Files to update:
-- pubspec.yaml (root folder)
-- lib/services/model_downloader.dart (create new file)
-- lib/services/gemma_service.dart (replace existing)
-- lib/main.dart (replace existing)
