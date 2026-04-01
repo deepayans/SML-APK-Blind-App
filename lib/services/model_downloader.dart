@@ -52,24 +52,50 @@ class ModelDownloader {
       
       if (await outFile.exists() && await outFile.length() > 0) {
         downloadedTotal += await outFile.length();
-        yield DownloadProgress(progress: downloadedTotal / totalSize, currentFile: file.name, fileIndex: i + 1, totalFiles: MODEL_FILES.length, status: 'Skipping ${file.name}');
+        yield DownloadProgress(
+          progress: downloadedTotal / totalSize,
+          currentFile: file.name,
+          fileIndex: i + 1,
+          totalFiles: MODEL_FILES.length,
+          status: 'Skipping ${file.name}',
+        );
         continue;
       }
       
-      yield DownloadProgress(progress: downloadedTotal / totalSize, currentFile: file.name, fileIndex: i + 1, totalFiles: MODEL_FILES.length, status: 'Downloading ${file.name}...');
+      yield DownloadProgress(
+        progress: downloadedTotal / totalSize,
+        currentFile: file.name,
+        fileIndex: i + 1,
+        totalFiles: MODEL_FILES.length,
+        status: 'Downloading ${file.name}...',
+      );
       
-      final response = await http.Client().send(http.Request('GET', Uri.parse('$HF_BASE/${file.name}')));
+      final response = await http.Client().send(
+        http.Request('GET', Uri.parse('$HF_BASE/${file.name}')),
+      );
       if (response.statusCode != 200) throw Exception('HTTP ${response.statusCode}');
       
       final sink = outFile.openWrite();
       await for (final chunk in response.stream) {
         sink.add(chunk);
         downloadedTotal += chunk.length;
-        yield DownloadProgress(progress: downloadedTotal / totalSize, currentFile: file.name, fileIndex: i + 1, totalFiles: MODEL_FILES.length, status: 'Downloading ${file.name}...');
+        yield DownloadProgress(
+          progress: downloadedTotal / totalSize,
+          currentFile: file.name,
+          fileIndex: i + 1,
+          totalFiles: MODEL_FILES.length,
+          status: 'Downloading ${file.name}...',
+        );
       }
       await sink.close();
     }
-    yield DownloadProgress(progress: 1.0, currentFile: 'Complete', fileIndex: MODEL_FILES.length, totalFiles: MODEL_FILES.length, status: 'Download complete!');
+    yield DownloadProgress(
+      progress: 1.0,
+      currentFile: 'Complete',
+      fileIndex: MODEL_FILES.length,
+      totalFiles: MODEL_FILES.length,
+      status: 'Download complete!',
+    );
   }
 
   static Future<void> deleteModel() async {
@@ -90,12 +116,19 @@ class DownloadProgress {
   final int fileIndex;
   final int totalFiles;
   final String status;
-  const DownloadProgress({required this.progress, required this.currentFile, required this.fileIndex, required this.totalFiles, required this.status});
+  const DownloadProgress({
+    required this.progress,
+    required this.currentFile,
+    required this.fileIndex,
+    required this.totalFiles,
+    required this.status,
+  });
 }
 
 class ModelDownloadScreen extends StatefulWidget {
   final VoidCallback onComplete;
   const ModelDownloadScreen({super.key, required this.onComplete});
+
   @override
   State<ModelDownloadScreen> createState() => _ModelDownloadScreenState();
 }
@@ -105,7 +138,10 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
   String? _error;
 
   @override
-  void initState() { super.initState(); _startDownload(); }
+  void initState() {
+    super.initState();
+    _startDownload();
+  }
 
   Future<void> _startDownload() async {
     setState(() => _error = null);
@@ -113,9 +149,14 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
       await for (final p in ModelDownloader.downloadModel()) {
         if (!mounted) return;
         setState(() => _progress = p);
-        if (p.progress >= 1.0) { await Future.delayed(const Duration(milliseconds: 500)); widget.onComplete(); }
+        if (p.progress >= 1.0) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          widget.onComplete();
+        }
       }
-    } catch (e) { if (mounted) setState(() => _error = '$e'); }
+    } catch (e) {
+      if (mounted) setState(() => _error = '$e');
+    }
   }
 
   @override
@@ -132,11 +173,17 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
             children: [
               const Icon(Icons.psychology_rounded, size: 60, color: Colors.blue),
               const SizedBox(height: 32),
-              const Text('Setting Up AI', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
+              const Text(
+                'Setting Up AI',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
               const SizedBox(height: 48),
               LinearProgressIndicator(value: _progress?.progress ?? 0, minHeight: 12),
               const SizedBox(height: 16),
-              Text('${((_progress?.progress ?? 0) * 100).toInt()}%  |  ${(done / 1024 / 1024).toStringAsFixed(0)} MB / ${(total / 1024 / 1024).toStringAsFixed(0)} MB', style: const TextStyle(color: Colors.white70)),
+              Text(
+                '${((_progress?.progress ?? 0) * 100).toInt()}%  |  ${(done / 1024 / 1024).toStringAsFixed(0)} MB / ${(total / 1024 / 1024).toStringAsFixed(0)} MB',
+                style: const TextStyle(color: Colors.white70),
+              ),
               const SizedBox(height: 16),
               Text(_progress?.status ?? 'Preparing...', style: const TextStyle(color: Colors.white54)),
               if (_error != null) ...[
@@ -145,7 +192,11 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
                 ElevatedButton(onPressed: _startDownload, child: const Text('Retry')),
               ],
               const SizedBox(height: 48),
-              const Text('One-time 2.5GB download\nWorks offline after this!', textAlign: TextAlign.center, style: TextStyle(color: Colors.white38)),
+              const Text(
+                'One-time 2.5GB download\nWorks offline after this!',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white38),
+              ),
             ],
           ),
         ),
