@@ -5,7 +5,9 @@ class GemmaService {
   bool _isLoaded = false;
   bool get isLoaded => _isLoaded;
 
-  Future<bool> needsModelDownload() async => !(await ModelDownloader.isModelDownloaded());
+  Future<bool> needsModelDownload() async {
+    return !(await ModelDownloader.isModelDownloaded());
+  }
 
   Future<void> loadModel() async {
     await Future.delayed(const Duration(seconds: 1));
@@ -14,16 +16,25 @@ class GemmaService {
 
   Future<String> analyzeImage(Uint8List imageBytes, String mode) async {
     if (!_isLoaded) throw Exception("Model not loaded");
+    
     int hash = 0;
-    for (int i = 0; i < imageBytes.length && i < 1000; i += 100) hash = (hash + imageBytes[i]) % 10;
+    for (int i = 0; i < imageBytes.length && i < 1000; i += 100) {
+      hash = (hash + imageBytes[i]) % 10;
+    }
 
     switch (mode.toLowerCase()) {
-      case 'scene': return _scene[hash % _scene.length];
-      case 'navigation': return _nav[hash % _nav.length];
-      case 'text': return _text[hash % _text.length];
-      case 'objects': return _obj[hash % _obj.length];
-      case 'quick': return _quick[hash % _quick.length];
-      default: return _scene[hash % _scene.length];
+      case 'scene':
+        return _scene[hash % _scene.length];
+      case 'navigation':
+        return _nav[hash % _nav.length];
+      case 'text':
+        return _text[hash % _text.length];
+      case 'objects':
+        return _obj[hash % _obj.length];
+      case 'quick':
+        return _quick[hash % _quick.length];
+      default:
+        return _scene[hash % _scene.length];
     }
   }
 
