@@ -1,198 +1,136 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:camera/camera.dart';
-
+import '../services/gemma_service.dart';
 import '../services/tts_service.dart';
 import '../services/stt_service.dart';
-import '../services/gemma_service.dart';
-import '../models/assistant_mode.dart';
-import '../models/analysis_result.dart';
+
+enum AssistantMode { scene, navigation, text, objects, quick }
 
 class AssistantProvider extends ChangeNotifier {
-  late final TTSService _tts;
-  late final STTService _stt;
-  late final GemmaService _gemma;
-  late CameraController _cameraController;
+  final GemmaService gemmaService;
+  final TtsService ttsService;
+  final SttService sttService;
 
-  AssistantMode _mode = AssistantMode.scene;
+  AssistantMode _currentMode = AssistantMode.scene;
   bool _isProcessing = false;
-  bool _isListening = false;
   bool _isModelLoaded = false;
-  bool _isCameraInitialized = false;
-  String _statusMessage = "Initializing...";
-  AnalysisResult? _lastResult;
-  final List<AnalysisResult> _history = [];
+  String _lastResponse = '';
+  String _statusMessage = 'Initializing...';
 
-  AssistantMode get mode => _mode;
+  AssistantMode get currentMode => _currentMode;
   bool get isProcessing => _isProcessing;
-  bool get isListening => _isListening;
   bool get isModelLoaded => _isModelLoaded;
-  bool get isCameraInitialized => _isCameraInitialized;
-  bool get isReady => _isModelLoaded && _isCameraInitialized;
+  String get lastResponse => _lastResponse;
   String get statusMessage => _statusMessage;
-  AnalysisResult? get lastResult => _lastResult;
-  List<AnalysisResult> get history => _history;
-  CameraController get cameraController => _cameraController;
 
-  AssistantProvider({required List<CameraDescription> cameras}) {
-    _initialize(cameras);
-  }
+  AssistantProvider({
+    required this.gemmaService,
+    required this.ttsService,
+    required this.sttService,
+  });
 
-  Future<void> _initialize(List<CameraDescription> cameras) async {
-    _tts = TTSService();
-    _stt = STTService();
-    _gemma = GemmaService();
-
-    await _tts.initialize();
-    await _stt.initialize();
-
-    if (cameras.isNotEmpty) {
-      _cameraController = CameraController(
-        cameras.first,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-
-      try {
-        await _cameraController.initialize();
-        _isCameraInitialized = true;
-        _statusMessage = "Camera ready";
-      } catch (e) {
-        _statusMessage = "Camera error: $e";
-      }
-    }
-
-    _statusMessage = "Loading AI model...";
-    notifyListeners();
-
+  Future<void> initialize() async {
     try {
-      await _gemma.loadModel();
+      _statusMessage = 'Loading AI model...';
+      notifyListeners();
+      
+      await gemmaService.loadModel();
+      await ttsService.initialize();
+      
       _isModelLoaded = true;
-      _statusMessage = "Ready! Tap to describe your surroundings.";
-      await _tts.speak("Vision Assistant ready. Tap the screen to describe your surroundings.");
+      _statusMessage = 'Ready';
+      notifyListeners();
+      
+      await ttsService.speak('Vision Assistant ready. Tap anywhere to analyze your surroundings.');
     } catch (e) {
-      _statusMessage = "Model loading failed. Using demo mode.";
-      _isModelLoaded = true;
-    }
-
-    notifyListeners();
-  }
-
-  void setMode(AssistantMode newMode) {
-    if (_mode != newMode) {
-      _mode = newMode;
-      HapticFeedback.mediumImpact();
-      _tts.speak("Mode: ${newMode.displayName}");
+      _statusMessage = 'Error: $e';
       notifyListeners();
     }
   }
 
-  void cycleMode() {
-    final modes = AssistantMode.values;
-    final nextIndex = (modes.indexOf(_mode) + 1) % modes.length;
-    setMode(modes[nextIndex]);
+  void setMode(AssistantMode mode) {
+    _currentMode = mode;
+    notifyListeners();
+    
+    final modeName = mode.name[0].toUpperCase() + mode.name.substring(1);
+    ttsService.speak('$modeName mode activated');
   }
 
-  Future<void> startListening() async {
-    if (_isListening || _isProcessing) return;
-
-    _isListening = true;
-    HapticFeedback.lightImpact();
+  Future<void> analyzeImage(Uint8List imageBytes) async {
+    if (_isProcessing) return;
+    
+    _isProcessing = true;
+    _statusMessage = 'Analyzing...';
     notifyListeners();
-
-    await _stt.startListening((result) {
-      if (result.isNotEmpty) _handleVoiceCommand(result);
-      _isListening = false;
+    
+    try {
+      await ttsService.speak('Analyzing image');
+      
+      final response = await gemmaService.analyzeImage(
+        imageBytes,
+        _currentMode.name,
+      );
+      
+      _lastResponse = response;
+      _statusMessage = 'Ready';
+      _isProcessing = false;
       notifyListeners();
-    });
+      
+      await ttsService.speak(response);
+    } catch (e) {
+      _statusMessage = 'Error: $e';
+      _isProcessing = false;
+      notifyListeners();
+      await ttsService.speak('Error analyzing image. Please try again.');
+    }
   }
 
-  void stopListening() {
-    _stt.stopListening();
-    _isListening = false;
-    notifyListeners();
+  Future<void> startVoiceCommand() async {
+    await ttsService.stop();
+    await ttsService.speak('Listening for command');
+    
+    await sttService.startListening(
+      onResult: (text) => _handleVoiceCommand(text),
+      onDone: () => notifyListeners(),
+    );
   }
 
   void _handleVoiceCommand(String command) {
-    final cmd = command.toLowerCase();
-
-    if (cmd.contains("describe") || cmd.contains("what") || cmd.contains("see")) {
+    final lower = command.toLowerCase();
+    
+    if (lower.contains('scene') || lower.contains('describe')) {
       setMode(AssistantMode.scene);
-      captureAndAnalyze();
-    } else if (cmd.contains("read") || cmd.contains("text")) {
-      setMode(AssistantMode.text);
-      captureAndAnalyze();
-    } else if (cmd.contains("navigate") || cmd.contains("obstacle")) {
+    } else if (lower.contains('navigate') || lower.contains('walk')) {
       setMode(AssistantMode.navigation);
-      captureAndAnalyze();
-    } else if (cmd.contains("object") || cmd.contains("find")) {
+    } else if (lower.contains('text') || lower.contains('read')) {
+      setMode(AssistantMode.text);
+    } else if (lower.contains('object') || lower.contains('find')) {
       setMode(AssistantMode.objects);
-      captureAndAnalyze();
-    } else if (cmd.contains("help")) {
-      _tts.speak("Say describe, read, navigate, or find.");
-    } else if (cmd.contains("repeat")) {
-      repeatLastResult();
-    } else {
-      captureAndAnalyze(customPrompt: command);
-    }
-  }
-
-  Future<void> captureAndAnalyze({String? customPrompt}) async {
-    if (_isProcessing || !_isCameraInitialized) return;
-
-    _isProcessing = true;
-    _statusMessage = "Capturing image...";
-    HapticFeedback.mediumImpact();
-    notifyListeners();
-
-    try {
-      final XFile imageFile = await _cameraController.takePicture();
-      final Uint8List imageBytes = await imageFile.readAsBytes();
-
-      _statusMessage = "Analyzing...";
-      notifyListeners();
-
-      final prompt = customPrompt ?? _mode.prompt;
-      final description = await _gemma.analyzeImage(imageBytes, prompt);
-
-      _lastResult = AnalysisResult(
-        description: description,
-        mode: _mode,
-        timestamp: DateTime.now(),
-        imagePath: imageFile.path,
+    } else if (lower.contains('quick') || lower.contains('fast')) {
+      setMode(AssistantMode.quick);
+    } else if (lower.contains('help')) {
+      ttsService.speak(
+        'Available commands: Scene description, Navigation, Read text, Find objects, Quick summary. '
+        'Tap the screen to analyze what the camera sees.'
       );
-
-      _history.insert(0, _lastResult!);
-      if (_history.length > 20) _history.removeLast();
-
-      _statusMessage = description;
-      await _tts.speak(description);
-    } catch (e) {
-      _statusMessage = "Error: Could not analyze image.";
-      await _tts.speak("Sorry, I could not analyze the image.");
-    } finally {
-      _isProcessing = false;
-      notifyListeners();
-    }
-  }
-
-  void repeatLastResult() {
-    if (_lastResult != null) {
-      _tts.speak(_lastResult!.description);
     } else {
-      _tts.speak("No previous description available.");
+      ttsService.speak('Command not recognized. Say help for available commands.');
     }
   }
 
-  void stopSpeaking() => _tts.stop();
+  void repeatLastResponse() {
+    if (_lastResponse.isNotEmpty) {
+      ttsService.speak(_lastResponse);
+    } else {
+      ttsService.speak('No previous response to repeat');
+    }
+  }
 
   @override
   void dispose() {
-    _cameraController.dispose();
-    _tts.dispose();
-    _stt.dispose();
-    _gemma.dispose();
+    gemmaService.dispose();
+    ttsService.dispose();
+    sttService.dispose();
     super.dispose();
   }
 }
