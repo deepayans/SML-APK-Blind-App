@@ -24,7 +24,7 @@ android {
         targetSdk = 34
         versionCode = flutter.versionCode()
         versionName = flutter.versionName()
-        
+
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
@@ -44,8 +44,12 @@ flutter {
 }
 
 dependencies {
-    // MLC LLM Android runtime — published on JitPack
-    // mlc4j bundles the MLC engine + TVM runtime for arm64
-    implementation("com.github.mlc-ai:mlc-llm-android:v0.1.1")
+    // mlc4j is NOT on any public Maven repo.
+    // The CI workflow downloads it from the MLC LLM GitHub release
+    // into android/app/libs/ before the build runs (see .github/workflows/build.yml).
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.aar", "*.jar"))))
+
+    // mlc4j transitive deps
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("com.google.code.gson:gson:2.10.1")
 }
