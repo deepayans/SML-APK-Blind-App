@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.vision_assistant"
-    compileSdk = 34
+    compileSdk = 35
     ndkVersion = "26.1.10909125"
 
     compileOptions {
@@ -21,9 +21,9 @@ android {
     defaultConfig {
         applicationId = "com.example.vision_assistant"
         minSdk = 26
-        targetSdk = 34
-        versionCode = flutter.versionCode()
-        versionName = flutter.versionName()
+        targetSdk = 35
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -38,7 +38,6 @@ android {
         }
     }
 
-    // Prevent duplicate native library conflicts between ML Kit and MediaPipe
     packaging {
         jniLibs {
             pickFirsts += setOf(
@@ -56,17 +55,11 @@ flutter {
 }
 
 dependencies {
-    // ── On-device vision — ML Kit ──────────────────────────────────────────
-    implementation("com.google.mlkit:image-labeling:17.0.8")
-    implementation("com.google.mlkit:object-detection:17.0.1")
-    implementation("com.google.mlkit:text-recognition:16.0.0")
+    // ── On-device vision — ML Kit (latest stable, all on Google Maven) ───
+    implementation("com.google.mlkit:image-labeling:17.0.9")
+    implementation("com.google.mlkit:object-detection:17.0.2")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
 
-    // ── On-device LLM — MediaPipe Gemma 2B ────────────────────────────────
-    // tasks-genai 0.10.14 is the latest confirmed stable release.
-    // Jetifier MUST be disabled (gradle.properties) or this transform fails.
-    implementation("com.google.mediapipe:tasks-genai:0.10.14")
-
-    // ── Support ────────────────────────────────────────────────────────────
+    // ── Coroutines for async plugin work ──────────────────────────────────
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("com.google.code.gson:gson:2.10.1")
 }
