@@ -22,7 +22,7 @@ android {
         applicationId = "com.example.vision_assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = flutter.versionCode()
+        versionCode = flutter.versionCode.toInteger()
         versionName = flutter.versionName()
 
         ndk {
@@ -55,13 +55,11 @@ flutter {
 }
 
 dependencies {
-    // Firebase BOM ensures version compatibility across all Google libraries
-    implementation(platform("com.google.firebase:firebase-bom:33.0.0"))
-    
-    // ── On-device vision — ML Kit (latest stable, all on Google Maven) ───
-    implementation("com.google.mlkit:image-labeling:17.0.9")
-    implementation("com.google.mlkit:object-detection:17.0.2")
-    implementation("com.google.mlkit:text-recognition:16.0.1")
+    // ── ML Kit dependencies (compatible versions) ─────────────────────────
+    implementation("com.google.mlkit:vision-common:17.3.0")
+    implementation("com.google.mlkit:image-labeling:17.0.8")
+    implementation("com.google.mlkit:object-detection:17.0.1")
+    implementation("com.google.mlkit:text-recognition:16.0.0")
 
     // ── Coroutines for async plugin work ──────────────────────────────────
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
