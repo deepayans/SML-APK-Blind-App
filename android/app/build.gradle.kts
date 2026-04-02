@@ -55,6 +55,9 @@ flutter {
 }
 
 dependencies {
+    // Firebase BOM ensures version compatibility across all Google libraries
+    implementation(platform("com.google.firebase:firebase-bom:33.0.0"))
+    
     // ── On-device vision — ML Kit (latest stable, all on Google Maven) ───
     implementation("com.google.mlkit:image-labeling:17.0.9")
     implementation("com.google.mlkit:object-detection:17.0.2")
