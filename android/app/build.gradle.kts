@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.vision_assistant"
-    compileSdk = 35
+    compileSdk = 34
     ndkVersion = "26.1.10909125"
 
     compileOptions {
@@ -21,9 +21,11 @@ android {
     defaultConfig {
         applicationId = "com.example.vision_assistant"
         minSdk = 26
-        targetSdk = 35
-        versionCode = flutter.versionCode.toInteger()
-        versionName = flutter.versionName()
+        targetSdk = 34
+        // flutter.versionCode / flutter.versionName are Kotlin properties in
+        // Flutter's Gradle plugin — do NOT call .toInteger() (Groovy syntax).
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -55,16 +57,11 @@ flutter {
 }
 
 dependencies {
-    // ── On-device vision — ML Kit ─────────────────────────────────────────
-    // vision-common must be declared explicitly alongside image-labeling to
-    // ensure ImageLabelerOptions resolves at compile time.  Firebase BOM is
-    // intentionally omitted because it overrides these versions and breaks
-    // the Kotlin build with "Unresolved reference: ImageLabelerOptions".
-    implementation("com.google.mlkit:vision-common:17.3.0")
+    // ML Kit — all offline, bundled with the library, no runtime download
     implementation("com.google.mlkit:image-labeling:17.0.8")
     implementation("com.google.mlkit:object-detection:17.0.1")
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
-    // ── Coroutines for async plugin work ──────────────────────────────────
+    // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
