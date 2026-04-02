@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.example.vision_assistant"
-    compileSdk = 35
+    compileSdk = 34
     ndkVersion = "26.1.10909125"
 
     compileOptions {
@@ -21,7 +21,7 @@ android {
     defaultConfig {
         applicationId = "com.example.vision_assistant"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = flutter.versionCode()
         versionName = flutter.versionName()
 
@@ -37,6 +37,18 @@ android {
             isShrinkResources = false
         }
     }
+
+    // Prevent duplicate native library conflicts between ML Kit and MediaPipe
+    packaging {
+        jniLibs {
+            pickFirsts += setOf(
+                "lib/arm64-v8a/libc++_shared.so",
+                "lib/armeabi-v7a/libc++_shared.so",
+                "lib/x86/libc++_shared.so",
+                "lib/x86_64/libc++_shared.so"
+            )
+        }
+    }
 }
 
 flutter {
@@ -44,18 +56,15 @@ flutter {
 }
 
 dependencies {
-    // ── On-device vision (ML Kit) ──────────────────────────────────────────
-    // All three libraries work fully offline after the first launch.
-    // Models are bundled inside the library or cached via Play Services.
-    implementation("com.google.mlkit:image-labeling:17.0.9")
-    implementation("com.google.mlkit:object-detection:17.0.2")
-    implementation("com.google.mlkit:text-recognition:16.0.1")
+    // ── On-device vision — ML Kit ──────────────────────────────────────────
+    implementation("com.google.mlkit:image-labeling:17.0.8")
+    implementation("com.google.mlkit:object-detection:17.0.1")
+    implementation("com.google.mlkit:text-recognition:16.0.0")
 
-    // ── On-device language generation (MediaPipe GenAI) ────────────────────
-    // Gemma 2B is used to turn ML Kit detections into natural-language
-    // descriptions.  The model file is downloaded once at first launch.
-    // MediaPipe Tasks GenAI is on Maven Central — no custom repos needed.
-    implementation("com.google.mediapipe:tasks-genai:0.10.22")
+    // ── On-device LLM — MediaPipe Gemma 2B ────────────────────────────────
+    // tasks-genai 0.10.14 is the latest confirmed stable release.
+    // Jetifier MUST be disabled (gradle.properties) or this transform fails.
+    implementation("com.google.mediapipe:tasks-genai:0.10.14")
 
     // ── Support ────────────────────────────────────────────────────────────
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
