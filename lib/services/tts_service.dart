@@ -29,6 +29,10 @@ class TtsService {
     await _tts.setSpeechRate(rate);
   }
 
+  Future<void> setVolume(double volume) async {
+    await _tts.setVolume(volume);
+  }
+
   void dispose() {
     _tts.stop();
   }

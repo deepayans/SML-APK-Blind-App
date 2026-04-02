@@ -53,21 +53,15 @@ class GemmaService {
   String _modePrompt(String mode) {
     switch (mode.toLowerCase()) {
       case 'scene':
-        return 'Describe this scene fully for a visually impaired person. '
-            'Include what is visible, positions (left/right/centre, near/far), '
-            'lighting, and any hazards.';
+        return 'Describe this scene for a visually impaired person, noting positions and any hazards.';
       case 'navigation':
-        return 'Analyse for safe navigation. List obstacles with positions and '
-            'distances. Identify the clearest path. Highlight hazards first.';
+        return 'Describe for navigation: identify obstacles with positions and the safest path forward.';
       case 'text':
-        return 'Read and transcribe every piece of text visible — '
-            'signs, labels, screens, handwriting.';
+        return 'Read all visible text aloud, including signs, labels, and any other writing.';
       case 'objects':
-        return 'List every distinct object with its position '
-            '(left/centre/right, near/far) and a brief description.';
+        return 'List every visible object with its position (left, centre, right) and distance (near, far).';
       case 'quick':
-        return 'In one sentence, state the single most important thing '
-            'a blind person needs to know right now.';
+        return 'State in one sentence the single most important thing a blind person needs to know right now.';
       default:
         return 'Describe what you see for someone who cannot see it.';
     }

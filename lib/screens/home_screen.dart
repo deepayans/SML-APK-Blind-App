@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import '../models/assistant_mode.dart';
 import '../providers/assistant_provider.dart';
 
 class HomeScreen extends StatefulWidget {

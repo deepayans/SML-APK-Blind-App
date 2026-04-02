@@ -1,10 +1,10 @@
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../models/analysis_result.dart';
+import '../models/assistant_mode.dart';
 import '../services/gemma_service.dart';
 import '../services/tts_service.dart';
 import '../services/stt_service.dart';
-
-enum AssistantMode { scene, navigation, text, objects, quick }
 
 class AssistantProvider extends ChangeNotifier {
   final GemmaService gemmaService;
@@ -16,12 +16,14 @@ class AssistantProvider extends ChangeNotifier {
   bool _isModelLoaded = false;
   String _lastResponse = '';
   String _statusMessage = 'Initializing...';
+  final List<AnalysisResult> _history = [];
 
   AssistantMode get currentMode => _currentMode;
   bool get isProcessing => _isProcessing;
   bool get isModelLoaded => _isModelLoaded;
   String get lastResponse => _lastResponse;
   String get statusMessage => _statusMessage;
+  List<AnalysisResult> get history => List.unmodifiable(_history);
 
   AssistantProvider({
     required this.gemmaService,
@@ -74,6 +76,11 @@ class AssistantProvider extends ChangeNotifier {
       _lastResponse = response;
       _statusMessage = 'Ready';
       _isProcessing = false;
+      _history.insert(0, AnalysisResult(
+        description: response,
+        mode: _currentMode,
+        timestamp: DateTime.now(),
+      ));
       notifyListeners();
       
       await ttsService.speak(response);

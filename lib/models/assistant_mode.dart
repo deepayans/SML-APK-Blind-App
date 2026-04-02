@@ -23,11 +23,11 @@ extension AssistantModeExtension on AssistantMode {
 
   String get icon {
     switch (this) {
-      case AssistantMode.scene: return "Scene";
-      case AssistantMode.navigation: return "Nav";
-      case AssistantMode.text: return "Read";
-      case AssistantMode.objects: return "Find";
-      case AssistantMode.quick: return "Quick";
+      case AssistantMode.scene:      return '🌍';
+      case AssistantMode.navigation: return '🧭';
+      case AssistantMode.text:       return '📖';
+      case AssistantMode.objects:    return '🔍';
+      case AssistantMode.quick:      return '⚡';
     }
   }
 

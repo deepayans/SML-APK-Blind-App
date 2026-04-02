@@ -192,18 +192,29 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         texts: List<String>,
         userRequest: String
     ): String {
-        val detections = buildString {
-            if (objects.isNotEmpty()) appendLine("Objects: ${objects.joinToString("; ")}")
-            if (texts.isNotEmpty())   appendLine("Visible text: ${texts.joinToString(" | ")}")
-            if (objects.isEmpty() && texts.isEmpty()) appendLine("No clear objects or text detected.")
-        }
+        // Build the detections section exactly as shown in the pipeline spec:
+        //   Scene detections: Objects: person at centre, close; chair at left
+        //   Visible text: EXIT | PUSH TO OPEN
+        val detectionLines = buildString {
+            when {
+                objects.isNotEmpty() -> {
+                    append("Scene detections: Objects: ${objects.joinToString("; ")}")
+                    appendLine()
+                    if (texts.isNotEmpty()) appendLine("Visible text: ${texts.joinToString(" | ")}")
+                }
+                texts.isNotEmpty() -> {
+                    appendLine("Scene detections: No objects detected.")
+                    appendLine("Visible text: ${texts.joinToString(" | ")}")
+                }
+                else -> appendLine("Scene detections: No objects or text detected.")
+            }
+        }.trim()
 
         return """You are a vision assistant for a visually impaired person. \
-Be concise, specific and mention spatial positions (left, right, centre, near, far). \
-Highlight hazards first.
+Be concise and specific. Mention spatial positions (left, right, centre, near, far). \
+Highlight hazards first. Keep the response to 2–3 sentences.
 
-Scene detections:
-$detections
+$detectionLines
 Task: $userRequest
 
 Response:""".trimIndent()

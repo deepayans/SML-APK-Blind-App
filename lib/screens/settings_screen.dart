@@ -10,7 +10,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  final TTSService _tts = TTSService();
+  final TtsService _tts = TtsService();
   final PreferencesService _prefs = PreferencesService();
 
   double _speechRate = 0.45;
@@ -62,7 +62,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onChanged: (value) {
                       setState(() => _speechRate = value);
                       _prefs.speechRate = value;
-                      _tts.setRate(value);
+                      _tts.setSpeechRate(value);
                     },
                   ),
                   const Text("Volume", style: TextStyle(fontSize: 16)),
@@ -126,7 +126,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const ListTile(
               leading: Icon(Icons.smart_toy_outlined),
               title: Text("AI Model"),
-              subtitle: Text("Gemma 3 4B (on-device)")),
+              subtitle: Text("Gemma 2B IT CPU INT4 (on-device)")),
         ],
       ),
     );
