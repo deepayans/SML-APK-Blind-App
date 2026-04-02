@@ -49,7 +49,7 @@ class VisionAssistantApp extends StatelessWidget {
 }
 
 /// Checks whether Gemma 2B has been downloaded.
-/// • First launch → shows mandatory download screen (~1.5 GB, WiFi recommended)
+/// • First launch (or model missing) → mandatory HF token + download screen
 /// • Subsequent launches → goes straight to the camera screen
 class AppStartup extends StatefulWidget {
   const AppStartup({super.key});
@@ -69,13 +69,13 @@ class _AppStartupState extends State<AppStartup> {
   }
 
   Future<void> _checkModel() async {
-    final needs = await ModelDownloader.isModelDownloaded() == false;
+    final downloaded = await ModelDownloader.isModelDownloaded();
     if (!mounted) return;
     setState(() {
       _checking = false;
-      _needsDownload = needs;
+      _needsDownload = !downloaded;
     });
-    if (!needs) _goHome();
+    if (downloaded) _goHome();
   }
 
   void _goHome() {

@@ -116,6 +116,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 24),
+          const Text("AI Model",
+              style: TextStyle(
+                  fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue)),
+          const SizedBox(height: 8),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: const [
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.smart_toy_outlined),
+                    title: Text("Gemma 2B IT CPU INT4 (optional)"),
+                    subtitle: Text("On-device language model for richer descriptions"),
+                  ),
+                  Divider(),
+                  Text(
+                    "Without Gemma the app works using ML Kit alone — "
+                    "objects and text are detected and spoken directly.\n\n"
+                    "To enable Gemma for natural language descriptions:\n"
+                    "1. Accept the licence at kaggle.com/models/google/gemma/tfLite\n"
+                    "2. Download  gemma-2b-it-cpu-int4.bin  (~1.5 GB)\n"
+                    "3. Copy the file to your phone and place it at:\n"
+                    "   /sdcard/Download/gemma-mediapipe/gemma-2b-it-cpu-int4.bin\n\n"
+                    "The app detects the file automatically on next launch.",
+                    style: TextStyle(fontSize: 13, height: 1.5, color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
           const Text("About",
               style: TextStyle(
                   fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue)),
