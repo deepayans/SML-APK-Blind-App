@@ -13,9 +13,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Show full repo structure
-        run: find . -not -path './.git/*' | sort
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -29,20 +26,11 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # mlc4j is the MLC LLM Android runtime (JNI bindings + TVM runtime).
-      # It is NOT published on Maven Central or JitPack — we download the AAR
-      # directly from the MLC LLM GitHub release and place it in libs/ so
-      # Gradle can pick it up via fileTree().
-      - name: Download mlc4j AAR
-        run: |
-          mkdir -p android/app/libs
-          curl -L -o android/app/libs/mlc4j.aar \
-            https://github.com/mlc-ai/mlc-llm/releases/download/v0.1.1/mlc4j-v0.1.1.aar
-          echo "mlc4j.aar size: $(du -sh android/app/libs/mlc4j.aar)"
-
       - name: Get Flutter dependencies
         run: flutter pub get
 
+      # All Android dependencies (ML Kit, MediaPipe GenAI) are on Maven Central.
+      # No AAR downloads, no custom repos, no authentication needed.
       - name: Build APK
         run: flutter build apk --release --target-platform android-arm64
 

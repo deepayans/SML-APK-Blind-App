@@ -24,17 +24,19 @@ class VisionAssistantApp extends StatelessWidget {
         Provider<GemmaService>(create: (_) => GemmaService()),
         Provider<TtsService>(create: (_) => TtsService()),
         Provider<SttService>(create: (_) => SttService()),
-        ChangeNotifierProxyProvider3<GemmaService, TtsService, SttService, AssistantProvider>(
+        ChangeNotifierProxyProvider3<GemmaService, TtsService, SttService,
+            AssistantProvider>(
           create: (ctx) => AssistantProvider(
             gemmaService: ctx.read<GemmaService>(),
             ttsService: ctx.read<TtsService>(),
             sttService: ctx.read<SttService>(),
           ),
-          update: (ctx, g, t, s, prev) => prev ?? AssistantProvider(
-            gemmaService: g,
-            ttsService: t,
-            sttService: s,
-          ),
+          update: (ctx, g, t, s, prev) => prev ??
+              AssistantProvider(
+                gemmaService: g,
+                ttsService: t,
+                sttService: s,
+              ),
         ),
       ],
       child: MaterialApp(
@@ -57,29 +59,16 @@ class AppStartup extends StatefulWidget {
 }
 
 class _AppStartupState extends State<AppStartup> {
-  bool _checking = true;
-  bool _needsDownload = false;
-
   @override
   void initState() {
     super.initState();
-    _checkModel();
-  }
-
-  Future<void> _checkModel() async {
-    final needs = !(await ModelDownloader.isModelDownloaded());
-    if (!mounted) return;
-    if (needs) {
-      setState(() {
-        _checking = false;
-        _needsDownload = true;
-      });
-    } else {
-      _goHome();
-    }
+    // ML Kit works immediately — go straight to the home screen.
+    // The optional Gemma download is offered from Settings.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _goHome());
   }
 
   void _goHome() {
+    if (!mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(builder: (_) => const HomeScreen()),
     );
@@ -87,15 +76,9 @@ class _AppStartupState extends State<AppStartup> {
 
   @override
   Widget build(BuildContext context) {
-    if (_checking) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF121212),
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (_needsDownload) {
-      return ModelDownloadScreen(onComplete: _goHome);
-    }
-    return const HomeScreen();
+    return const Scaffold(
+      backgroundColor: Color(0xFF121212),
+      body: Center(child: CircularProgressIndicator()),
+    );
   }
 }

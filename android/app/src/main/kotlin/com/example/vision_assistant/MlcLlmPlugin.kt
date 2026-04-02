@@ -4,32 +4,74 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeling
+import com.google.mlkit.vision.label.ImageLabelerOptions
+import com.google.mlkit.vision.objects.ObjectDetection
+import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import kotlinx.coroutines.*
-import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
 
-// MLC LLM Android runtime (com.github.mlc-ai:mlc-llm-android via JitPack / maven.mlc.ai)
-import ai.mlc.mlcllm.MLCEngine
-import ai.mlc.mlcllm.OpenAIProtocol
+private const val TAG = "VisionPlugin"
 
-private const val TAG = "MlcLlmPlugin"
-
+/**
+ * Flutter platform channel plugin that powers on-device vision inference.
+ *
+ * Architecture:
+ *   ML Kit  →  detects labels / objects / text in the image (always offline,
+ *              no model download required beyond first Play Services sync)
+ *   Gemma 2B via MediaPipe  →  turns detections into a natural-language
+ *              description (optional; requires one-time ~1.5 GB download)
+ *
+ * If Gemma is not yet downloaded the plugin returns a structured description
+ * built from ML Kit results alone — still useful for a blind user.
+ */
 class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
 
-    // MLCEngine is NOT thread-safe — single-threaded dispatcher
-    private var engine: MLCEngine? = null
-    private val mlcThread = Dispatchers.IO.limitedParallelism(1)
-    private val scope = CoroutineScope(mlcThread + SupervisorJob())
+    // MediaPipe Gemma (optional — app works without it via ML Kit only)
+    private var llm: LlmInference? = null
 
-    // ── Flutter plugin lifecycle ─────────────────────────────────────────────
+    // Single-threaded dispatcher keeps MLKit + LLM calls serialised
+    private val workerThread = Dispatchers.IO.limitedParallelism(1)
+    private val scope = CoroutineScope(workerThread + SupervisorJob())
+
+    // ── ML Kit clients (created lazily, reused across calls) ─────────────
+
+    private val labeler by lazy {
+        ImageLabeling.getClient(
+            ImageLabelerOptions.Builder().setConfidenceThreshold(0.60f).build()
+        )
+    }
+
+    private val objectDetector by lazy {
+        ObjectDetection.getClient(
+            ObjectDetectorOptions.Builder()
+                .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
+                .enableMultipleObjects()
+                .enableClassification()
+                .build()
+        )
+    }
+
+    private val textRecognizer by lazy {
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+    }
+
+    // ── FlutterPlugin lifecycle ───────────────────────────────────────────
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -39,11 +81,11 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        scope.launch { engine?.unload(); engine = null }
+        scope.launch { llm?.close(); llm = null }
         scope.cancel()
     }
 
-    // ── Method dispatch ──────────────────────────────────────────────────────
+    // ── Method dispatch ───────────────────────────────────────────────────
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
@@ -63,210 +105,272 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                     ?: return result.error("INVALID_ARGUMENT", "prompt required", null)
                 handleGenerateText(prompt, result)
             }
-            "isModelLoaded" -> result.success(engine != null)
+            "isModelLoaded" -> result.success(llm != null)
             "unloadModel"   -> handleUnloadModel(result)
             else            -> result.notImplemented()
         }
     }
 
-    // ── loadModel ────────────────────────────────────────────────────────────
+    // ── loadModel ─────────────────────────────────────────────────────────
     //
-    // MLCEngine.reload(path) reads mlc-chat-config.json from `path`, locates
-    // the compiled .so via lib_local_path, and mmaps the weight shards.
-    // `path` must be the directory saved by ModelDownloader.
+    // Loads the Gemma 2B task file via MediaPipe LlmInference.
+    // The model file is the single *.bin / *.task that ModelDownloader saves.
 
     private fun handleLoadModel(modelPath: String, result: Result) {
         scope.launch {
             try {
                 val dir = File(modelPath)
-                if (!dir.exists() || !dir.isDirectory) {
-                    return@launch mainResult(result) {
-                        it.error("MODEL_NOT_FOUND", "Directory not found: $modelPath", null)
-                    }
+                // Accept either a directory (find the .bin/.task inside) or a direct file path
+                val modelFile: File = if (dir.isDirectory) {
+                    dir.listFiles()
+                        ?.firstOrNull { it.extension == "bin" || it.extension == "task" }
+                        ?: throw Exception(
+                            "No .bin or .task model file found in $modelPath. " +
+                            "Complete the model download first."
+                        )
+                } else {
+                    dir.takeIf { it.exists() }
+                        ?: throw Exception("Model file not found: $modelPath")
                 }
-                if (!File(dir, "mlc-chat-config.json").exists()) {
-                    return@launch mainResult(result) {
-                        it.error("MODEL_INVALID", "mlc-chat-config.json missing in $modelPath", null)
-                    }
-                }
 
-                Log.i(TAG, "Loading model from: $modelPath")
-                engine?.unload()
+                Log.i(TAG, "Loading Gemma from: ${modelFile.absolutePath}")
 
-                val eng = MLCEngine()
-                eng.reload(modelPath)
-                engine = eng
+                llm?.close()
 
-                Log.i(TAG, "Model loaded successfully")
+                val options = LlmInference.LlmInferenceOptions.builder()
+                    .setModelPath(modelFile.absolutePath)
+                    .setMaxTokens(512)
+                    .build()
+
+                llm = LlmInference.createFromOptions(context, options)
+                Log.i(TAG, "Gemma loaded successfully")
                 mainResult(result) { it.success(true) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "loadModel failed", e)
+                Log.e(TAG, "loadModel failed: ${e.message}")
                 mainResult(result) {
-                    it.error("LOAD_ERROR", "Failed to load model: ${e.message}", null)
+                    it.error("LOAD_ERROR", e.message ?: "Failed to load model", null)
                 }
             }
         }
     }
 
-    // ── analyzeImage ─────────────────────────────────────────────────────────
+    // ── analyzeImage ──────────────────────────────────────────────────────
     //
-    // MiniCPM-V (and other MLC-compiled VLMs) accept images via the OpenAI
-    // vision message format:
-    //   content: [
-    //     { type: "image_url", image_url: { url: "data:image/jpeg;base64,<b64>" } },
-    //     { type: "text",      text: "<prompt>" }
-    //   ]
-    //
-    // The MLC runtime's vision encoder (SigLIP) tokenises the pixels before
-    // passing them to the language model.  The base64 must be a JPEG/PNG.
+    // Pipeline:
+    //   1. Decode JPEG from camera
+    //   2. ML Kit: image labels  (what things are in the scene)
+    //   3. ML Kit: object detection  (where they are)
+    //   4. ML Kit: text recognition  (any visible text)
+    //   5a. If Gemma loaded → format detections as a prompt, generate response
+    //   5b. Otherwise → format detections as a structured description
 
     private fun handleAnalyzeImage(imageBytes: ByteArray, prompt: String, result: Result) {
         scope.launch {
-            val eng = engine ?: return@launch mainResult(result) {
-                it.error("MODEL_NOT_LOADED", "Call loadModel() before analyzeImage()", null)
-            }
-
             try {
-                // 1. Decode + resize/crop camera JPEG to 448x448
-                val original = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-                    ?: throw IllegalArgumentException("Could not decode image bytes")
+                val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+                    ?: throw Exception("Could not decode image")
 
-                val resized = resizeAndCrop(original, 448)
-                original.recycle()
+                // Run all three ML Kit tasks in parallel
+                val (labels, objects, texts) = analyzeWithMlKit(bitmap)
+                bitmap.recycle()
 
-                // 2. Re-encode to JPEG base64
-                val bos = ByteArrayOutputStream()
-                resized.compress(Bitmap.CompressFormat.JPEG, 90, bos)
-                resized.recycle()
-                val b64 = android.util.Base64.encodeToString(
-                    bos.toByteArray(), android.util.Base64.NO_WRAP
-                )
+                val response: String = if (llm != null) {
+                    // Build a rich prompt from detections, let Gemma describe naturally
+                    val detectionContext = buildDetectionContext(labels, objects, texts)
+                    val gemmaPrompt = """
+You are a vision assistant for a visually impaired person.
+The following elements were detected in the image:
+$detectionContext
 
-                // 3. Build OpenAI-compatible vision message
-                val imageContent = OpenAIProtocol.ChatCompletionMessageContent(
-                    type      = "image_url",
-                    imageUrl  = OpenAIProtocol.ImageURL(url = "data:image/jpeg;base64,$b64")
-                )
-                val textContent = OpenAIProtocol.ChatCompletionMessageContent(
-                    type = "text",
-                    text = buildSystemPrompt(prompt)
-                )
+Based on these detections, respond to this request: $prompt
 
-                val userMessage = OpenAIProtocol.ChatCompletionMessage(
-                    role    = OpenAIProtocol.ChatCompletionRole.user,
-                    content = listOf(imageContent, textContent)
-                )
+Be concise, specific, and include spatial positions where known.
+Mention any hazards prominently.
+""".trimIndent()
+                    llm!!.generateResponse(gemmaPrompt)
+                } else {
+                    // No LLM — format ML Kit results as a readable description
+                    buildFallbackDescription(labels, objects, texts, prompt)
+                }
 
-                // 4. Inference
-                val request = OpenAIProtocol.ChatCompletionRequest(
-                    messages    = listOf(userMessage),
-                    max_tokens  = 350,
-                    temperature = 0.3f,
-                    stream      = false
-                )
-
-                val response = eng.chat.completions.create(request)
-                val text = response.choices
-                    ?.firstOrNull()
-                    ?.message
-                    ?.content
-                    ?.trim()
-                    ?: "No response generated"
-
-                Log.d(TAG, "Inference result: $text")
-                mainResult(result) { it.success(text) }
+                mainResult(result) { it.success(response) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "analyzeImage failed", e)
+                Log.e(TAG, "analyzeImage failed: ${e.message}")
                 mainResult(result) {
-                    it.error("INFERENCE_ERROR", "Image analysis failed: ${e.message}", null)
+                    it.error("INFERENCE_ERROR", e.message ?: "Analysis failed", null)
                 }
             }
         }
     }
 
-    // ── generateText ─────────────────────────────────────────────────────────
+    // ── ML Kit helpers ─────────────────────────────────────────────────────
+
+    private data class MlKitResults(
+        val labels: List<String>,
+        val objects: List<String>,
+        val texts: List<String>
+    )
+
+    private suspend fun analyzeWithMlKit(bitmap: Bitmap): MlKitResults {
+        val image = InputImage.fromBitmap(bitmap, 0)
+
+        // Run all three concurrently
+        val labelsDeferred = scope.async { runLabeler(image) }
+        val objectsDeferred = scope.async { runObjectDetector(image) }
+        val textsDeferred = scope.async { runTextRecognizer(image) }
+
+        return MlKitResults(
+            labels  = labelsDeferred.await(),
+            objects = objectsDeferred.await(),
+            texts   = textsDeferred.await()
+        )
+    }
+
+    private suspend fun runLabeler(image: InputImage): List<String> =
+        suspendCoroutine { cont ->
+            labeler.process(image)
+                .addOnSuccessListener { labels ->
+                    cont.resume(labels.map { "${it.text} (${(it.confidence * 100).toInt()}%)" })
+                }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
+
+    private suspend fun runObjectDetector(image: InputImage): List<String> =
+        suspendCoroutine { cont ->
+            objectDetector.process(image)
+                .addOnSuccessListener { objects ->
+                    cont.resume(objects.map { obj ->
+                        val label = obj.labels.firstOrNull()?.text ?: "unknown object"
+                        val box = obj.boundingBox
+                        val pos = when {
+                            box.centerX() < image.width  * 0.33 -> "left"
+                            box.centerX() < image.width  * 0.66 -> "centre"
+                            else                                  -> "right"
+                        }
+                        val dist = if (box.height() > image.height * 0.4) "near" else "far"
+                        "$label at $pos, $dist"
+                    })
+                }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
+
+    private suspend fun runTextRecognizer(image: InputImage): List<String> =
+        suspendCoroutine { cont ->
+            textRecognizer.process(image)
+                .addOnSuccessListener { visionText ->
+                    val lines = visionText.textBlocks
+                        .flatMap { it.lines }
+                        .map { it.text.trim() }
+                        .filter { it.isNotBlank() }
+                    cont.resume(lines)
+                }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
+
+    // ── Prompt / description builders ──────────────────────────────────────
+
+    private fun buildDetectionContext(
+        labels: List<String>,
+        objects: List<String>,
+        texts: List<String>
+    ): String = buildString {
+        if (labels.isNotEmpty()) {
+            appendLine("Scene labels: ${labels.joinToString(", ")}")
+        }
+        if (objects.isNotEmpty()) {
+            appendLine("Detected objects: ${objects.joinToString("; ")}")
+        }
+        if (texts.isNotEmpty()) {
+            appendLine("Visible text: ${texts.joinToString(" | ")}")
+        }
+        if (isEmpty()) appendLine("No specific elements detected with high confidence.")
+    }
+
+    private fun buildFallbackDescription(
+        labels: List<String>,
+        objects: List<String>,
+        texts: List<String>,
+        prompt: String
+    ): String = buildString {
+        val mode = prompt.lowercase()
+
+        when {
+            mode.contains("text") || mode.contains("read") -> {
+                if (texts.isEmpty()) {
+                    append("No text detected in the image.")
+                } else {
+                    append("Text found: ")
+                    append(texts.joinToString(". "))
+                }
+            }
+            mode.contains("navig") || mode.contains("walk") -> {
+                append("Scene: ")
+                if (labels.isNotEmpty()) append(labels.take(3).map { it.substringBefore(" (") }.joinToString(", "))
+                if (objects.isNotEmpty()) {
+                    append(". Objects: ")
+                    append(objects.take(4).joinToString("; "))
+                }
+                append(". Proceed carefully.")
+            }
+            else -> {
+                if (labels.isNotEmpty()) {
+                    append("Scene contains: ")
+                    append(labels.take(5).map { it.substringBefore(" (") }.joinToString(", "))
+                    append(". ")
+                }
+                if (objects.isNotEmpty()) {
+                    append("Objects detected: ")
+                    append(objects.take(4).joinToString("; "))
+                    append(". ")
+                }
+                if (texts.isNotEmpty()) {
+                    append("Visible text: ")
+                    append(texts.take(3).joinToString(". "))
+                }
+                if (isEmpty()) append("Scene unclear. Move closer or improve lighting.")
+            }
+        }
+    }
+
+    // ── generateText ──────────────────────────────────────────────────────
 
     private fun handleGenerateText(prompt: String, result: Result) {
         scope.launch {
-            val eng = engine ?: return@launch mainResult(result) {
-                it.error("MODEL_NOT_LOADED", "Call loadModel() first", null)
+            val model = llm
+            if (model == null) {
+                mainResult(result) {
+                    it.error("MODEL_NOT_LOADED", "Gemma model not loaded. Download it from Settings.", null)
+                }
+                return@launch
             }
             try {
-                val userMessage = OpenAIProtocol.ChatCompletionMessage(
-                    role    = OpenAIProtocol.ChatCompletionRole.user,
-                    content = prompt
-                )
-                val request = OpenAIProtocol.ChatCompletionRequest(
-                    messages    = listOf(userMessage),
-                    max_tokens  = 256,
-                    temperature = 0.7f,
-                    stream      = false
-                )
-                val response = eng.chat.completions.create(request)
-                val text = response.choices
-                    ?.firstOrNull()
-                    ?.message
-                    ?.content
-                    ?.trim()
-                    ?: "No response"
-
-                mainResult(result) { it.success(text) }
+                val response = model.generateResponse(prompt)
+                mainResult(result) { it.success(response) }
             } catch (e: Exception) {
-                Log.e(TAG, "generateText failed", e)
                 mainResult(result) {
-                    it.error("INFERENCE_ERROR", "Text generation failed: ${e.message}", null)
+                    it.error("INFERENCE_ERROR", e.message ?: "Generation failed", null)
                 }
             }
         }
     }
 
-    // ── unloadModel ───────────────────────────────────────────────────────────
+    // ── unloadModel ───────────────────────────────────────────────────────
 
     private fun handleUnloadModel(result: Result) {
         scope.launch {
             try {
-                engine?.unload()
-                engine = null
+                llm?.close()
+                llm = null
                 mainResult(result) { it.success(true) }
             } catch (e: Exception) {
-                mainResult(result) {
-                    it.error("UNLOAD_ERROR", "Unload failed: ${e.message}", null)
-                }
+                mainResult(result) { it.error("UNLOAD_ERROR", e.message, null) }
             }
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    /**
-     * Scale so the shorter side == [size], then centre-crop to [size]x[size].
-     * Matches the preprocessing expected by MiniCPM-V's SigLIP vision encoder.
-     */
-    private fun resizeAndCrop(src: Bitmap, size: Int): Bitmap {
-        val w = src.width.toFloat()
-        val h = src.height.toFloat()
-        val scale = size / minOf(w, h)
-        val scaledW = (w * scale).toInt()
-        val scaledH = (h * scale).toInt()
-
-        val scaled  = Bitmap.createScaledBitmap(src, scaledW, scaledH, true)
-        val x       = (scaledW - size) / 2
-        val y       = (scaledH - size) / 2
-        val cropped = Bitmap.createBitmap(scaled, x, y, size, size)
-        if (cropped !== scaled) scaled.recycle()
-        return cropped
-    }
-
-    /**
-     * Wraps the analytical prompt in a system context for a blind user's assistant.
-     */
-    private fun buildSystemPrompt(userPrompt: String): String =
-        "You are a vision assistant for a visually impaired person. " +
-        "Analyse the image and respond to: $userPrompt\n" +
-        "Be concise and specific. Include spatial positions (left, right, centre, " +
-        "near, far). Mention hazards prominently."
+    // ── Utility ───────────────────────────────────────────────────────────
 
     private suspend fun mainResult(result: Result, block: (Result) -> Unit) =
         withContext(Dispatchers.Main) { block(result) }

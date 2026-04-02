@@ -2,59 +2,46 @@ import 'dart:typed_data';
 import 'model_downloader.dart';
 import 'mlc_inference.dart';
 
-/// Wraps the MLC LLM inference channel to provide image analysis.
+/// Coordinates image analysis using the native plugin.
 ///
-/// Renamed class kept as [GemmaService] to avoid cascading file renames,
-/// but now backed by MiniCPM-V — a real Vision-Language Model that understands
-/// both the image and the text prompt simultaneously.
+/// The native plugin (MlcLlmPlugin.kt) uses:
+///   - ML Kit  → always-on, zero download, offline image understanding
+///   - Gemma 2B via MediaPipe  → optional, richer descriptions
 ///
-/// Key fixes vs the original:
-///   - No silent fallback to canned demo strings.
-///     If inference fails the error propagates so the UI can tell the user.
-///   - Prompt building delegated to [_buildPrompt] as before, but these
-///     prompts are now actually processed against the real image.
-///   - [_mlcInference.isLoaded] is the sole gate; the demo path is gone.
+/// This service reflects that: [loadModel] is optional (the app works
+/// without it), and [analyzeImage] always returns a real description.
 class GemmaService {
-  final MlcInference _mlcInference = MlcInference();
+  final MlcInference _inference = MlcInference();
   bool _isLoaded = false;
 
+  /// Whether the optional Gemma LLM is loaded.
   bool get isLoaded => _isLoaded;
 
+  /// True if Gemma model file has been downloaded.
   Future<bool> needsModelDownload() async =>
       !(await ModelDownloader.isModelDownloaded());
 
+  /// Optionally load the Gemma LLM for richer descriptions.
+  /// Safe to skip — ML Kit handles inference without it.
   Future<void> loadModel() async {
-    if (await needsModelDownload()) {
-      throw Exception(
-          'Model not downloaded. Download it first via the setup screen.');
-    }
-
     final modelPath = await ModelDownloader.getModelPath();
-    final loaded = await _mlcInference.loadModel(modelPath);
-
-    if (!loaded) {
-      // loadModel returns false only when the platform channel itself fails
-      // (e.g. wrong ABI, missing .so).  Throw a clear message.
-      throw Exception(
-          'MLCEngine failed to load the model from $modelPath. '
-          'Ensure the compiled .so is present and the device is arm64.');
+    try {
+      final loaded = await _inference.loadModel(modelPath);
+      _isLoaded = loaded;
+    } catch (e) {
+      // Gemma failed to load — that's OK, ML Kit still works.
+      _isLoaded = false;
+      // Re-throw only if the file exists but failed, so the caller can log it.
+      if (!(await needsModelDownload())) rethrow;
     }
-
-    _isLoaded = true;
   }
 
-  /// Analyse [imageBytes] according to [mode].
+  /// Analyse [imageBytes] for the given [mode].
   ///
-  /// Throws on failure — the caller ([AssistantProvider]) catches and
-  /// surfaces the error to the user via TTS + status text.
+  /// Always returns a real result — ML Kit handles it even if Gemma isn't loaded.
   Future<String> analyzeImage(Uint8List imageBytes, String mode) async {
-    if (!_isLoaded) throw Exception('Model not loaded. Call loadModel() first.');
-    if (!_mlcInference.isLoaded) {
-      throw Exception('Native MLC engine not ready.');
-    }
-
     final prompt = _buildPrompt(mode);
-    return await _mlcInference.analyzeImage(imageBytes, prompt);
+    return await _inference.analyzeImage(imageBytes, prompt);
   }
 
   String _buildPrompt(String mode) {
@@ -62,27 +49,24 @@ class GemmaService {
       case 'scene':
         return 'Describe this scene in detail for a visually impaired person. '
             'Include all visible objects, their positions (left, right, centre, '
-            'near, far), lighting conditions, and any potential hazards.';
+            'near, far), lighting, and any potential hazards.';
       case 'navigation':
-        return 'Analyse this image for safe navigation. Identify the clear path '
-            'ahead, any obstacles or hazards with their positions and approximate '
-            'distances, and give concise walking directions.';
+        return 'Analyse this image for safe navigation. Identify the clear path, '
+            'any obstacles or hazards with positions and distances, '
+            'and give concise walking directions.';
       case 'text':
         return 'Read and transcribe every piece of text visible in this image. '
-            'Include signs, labels, screens, documents, and handwriting.';
+            'Include signs, labels, screens, and handwriting.';
       case 'objects':
-        return 'List every distinct object visible in this image. '
-            'For each, state its approximate position (left/centre/right, '
-            'near/far) and a brief description.';
+        return 'List every distinct object visible with its approximate position '
+            '(left/centre/right, near/far) and a brief description.';
       case 'quick':
-        return 'In one or two sentences, tell a blind person the single most '
-            'important thing they need to know about this image right now.';
+        return 'In one sentence, state the most important thing a blind person '
+            'needs to know about this image right now.';
       default:
         return 'Describe what you see in this image for someone who cannot see it.';
     }
   }
 
-  void dispose() {
-    _mlcInference.unloadModel();
-  }
+  void dispose() => _inference.unloadModel();
 }
