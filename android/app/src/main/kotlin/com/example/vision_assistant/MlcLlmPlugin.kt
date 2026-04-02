@@ -23,28 +23,12 @@ import kotlin.coroutines.suspendCoroutine
 
 private const val TAG = "VisionPlugin"
 
-/**
- * Flutter platform channel plugin — fully offline vision via ML Kit.
- *
- * Uses three ML Kit APIs (all bundled, zero runtime download required):
- *   • Image Labeling  — what things are in the scene
- *   • Object Detection — where detected objects are positioned
- *   • Text Recognition — any readable text in the frame
- *
- * The optional on-device LLM layer (previously MediaPipe Gemma) has been
- * removed from the native side.  The Dart layer (GemmaService / MlcInference)
- * gracefully handles [loadModel] returning false and continues to call
- * [analyzeImage], which always produces a real ML Kit description.
- */
 class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
 
-    private val workerThread = Dispatchers.IO.limitedParallelism(1)
-    private val scope = CoroutineScope(workerThread + SupervisorJob())
-
-    // ── ML Kit clients (lazy, reused) ─────────────────────────────────────
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val labeler by lazy {
         ImageLabeling.getClient(
@@ -66,8 +50,6 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
-    // ── FlutterPlugin lifecycle ───────────────────────────────────────────
-
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
         channel = MethodChannel(binding.binaryMessenger, "mlc_llm_channel")
@@ -79,79 +61,53 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         scope.cancel()
     }
 
-    // ── Method dispatch ───────────────────────────────────────────────────
-
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
-            "loadModel" -> {
-                // LLM loading is not supported in this build.
-                // Return false so the Dart layer falls back to ML Kit descriptions.
-                result.success(false)
-            }
-            "analyzeImage" -> {
+            "loadModel"     -> result.success(false)   // no LLM in this build
+            "isModelLoaded" -> result.success(false)
+            "unloadModel"   -> result.success(true)
+            "generateText"  -> result.error("NOT_SUPPORTED", "LLM not available", null)
+            "analyzeImage"  -> {
                 val imageBytes = call.argument<ByteArray>("imageBytes")
                     ?: return result.error("INVALID_ARGUMENT", "imageBytes required", null)
                 val prompt = call.argument<String>("prompt") ?: "Describe this image"
-                handleAnalyzeImage(imageBytes, prompt, result)
+                analyzeImage(imageBytes, prompt, result)
             }
-            "generateText" -> {
-                // LLM text generation is not supported in this build.
-                result.error("MODEL_NOT_LOADED", "On-device LLM not available. Analysis uses ML Kit.", null)
-            }
-            "isModelLoaded" -> result.success(false)
-            "unloadModel"   -> result.success(true)
-            else            -> result.notImplemented()
+            else -> result.notImplemented()
         }
     }
 
-    // ── analyzeImage ──────────────────────────────────────────────────────
-    //
-    // Pipeline:
-    //   1. Decode JPEG bytes from camera
-    //   2. ML Kit: image labels  (scene classification)
-    //   3. ML Kit: object detection  (position-aware object list)
-    //   4. ML Kit: text recognition  (OCR)
-    //   5. Format results into an accessible description
-
-    private fun handleAnalyzeImage(imageBytes: ByteArray, prompt: String, result: Result) {
+    private fun analyzeImage(imageBytes: ByteArray, prompt: String, result: Result) {
         scope.launch {
             try {
                 val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
                     ?: throw Exception("Could not decode image")
 
-                val (labels, objects, texts) = analyzeWithMlKit(bitmap)
+                val bitmapWidth  = bitmap.width
+                val bitmapHeight = bitmap.height
+                val image        = InputImage.fromBitmap(bitmap, 0)
+
+                // Run all three ML Kit tasks in parallel
+                val labelsJob  = async { runLabeler(image) }
+                val objectsJob = async { runObjectDetector(image, bitmapWidth, bitmapHeight) }
+                val textsJob   = async { runTextRecognizer(image) }
+
+                val labels  = labelsJob.await()
+                val objects = objectsJob.await()
+                val texts   = textsJob.await()
+
                 bitmap.recycle()
 
                 val response = buildDescription(labels, objects, texts, prompt)
-                mainResult(result) { it.success(response) }
+                withContext(Dispatchers.Main) { result.success(response) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "analyzeImage failed: ${e.message}")
-                mainResult(result) {
-                    it.error("INFERENCE_ERROR", e.message ?: "Analysis failed", null)
+                Log.e(TAG, "analyzeImage error: ${e.message}")
+                withContext(Dispatchers.Main) {
+                    result.error("INFERENCE_ERROR", e.message ?: "Analysis failed", null)
                 }
             }
         }
-    }
-
-    // ── ML Kit helpers ─────────────────────────────────────────────────────
-
-    private data class MlKitResults(
-        val labels: List<String>,
-        val objects: List<String>,
-        val texts: List<String>
-    )
-
-    private suspend fun analyzeWithMlKit(bitmap: Bitmap): MlKitResults {
-        val image = InputImage.fromBitmap(bitmap, 0)
-        val labelsDeferred  = scope.async { runLabeler(image) }
-        val objectsDeferred = scope.async { runObjectDetector(image) }
-        val textsDeferred   = scope.async { runTextRecognizer(image) }
-        return MlKitResults(
-            labels  = labelsDeferred.await(),
-            objects = objectsDeferred.await(),
-            texts   = textsDeferred.await()
-        )
     }
 
     private suspend fun runLabeler(image: InputImage): List<String> =
@@ -163,20 +119,26 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 .addOnFailureListener { cont.resumeWithException(it) }
         }
 
-    private suspend fun runObjectDetector(image: InputImage): List<String> =
+    // bitmapWidth/bitmapHeight are passed in to avoid using InputImage.width/height,
+    // which requires vision-common >= 17.3 and may not resolve via transitive deps.
+    private suspend fun runObjectDetector(
+        image: InputImage,
+        bitmapWidth: Int,
+        bitmapHeight: Int
+    ): List<String> =
         suspendCoroutine { cont ->
             objectDetector.process(image)
-                .addOnSuccessListener { objects ->
-                    cont.resume(objects.map { obj ->
-                        val label = obj.labels.firstOrNull()?.text ?: "unknown object"
-                        val box = obj.boundingBox
-                        val pos = when {
-                            box.centerX() < image.width  * 0.33 -> "left"
-                            box.centerX() < image.width  * 0.66 -> "centre"
-                            else                                  -> "right"
+                .addOnSuccessListener { detectedObjects ->
+                    cont.resume(detectedObjects.map { obj ->
+                        val label = obj.labels.firstOrNull()?.text ?: "object"
+                        val cx    = obj.boundingBox.exactCenterX()
+                        val pos   = when {
+                            cx < bitmapWidth * 0.33f -> "left"
+                            cx < bitmapWidth * 0.66f -> "centre"
+                            else                      -> "right"
                         }
-                        val dist = if (box.height() > image.height * 0.4) "near" else "far"
-                        "$label at $pos, $dist"
+                        val near = obj.boundingBox.height() > bitmapHeight * 0.4f
+                        "$label at $pos, ${if (near) "near" else "far"}"
                     })
                 }
                 .addOnFailureListener { cont.resumeWithException(it) }
@@ -195,8 +157,6 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 .addOnFailureListener { cont.resumeWithException(it) }
         }
 
-    // ── Description builder ────────────────────────────────────────────────
-
     private fun buildDescription(
         labels: List<String>,
         objects: List<String>,
@@ -206,23 +166,27 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         val mode = prompt.lowercase()
         when {
             mode.contains("text") || mode.contains("read") -> {
-                if (texts.isEmpty()) append("No text detected in the image.")
+                if (texts.isEmpty()) append("No text detected.")
                 else { append("Text found: "); append(texts.joinToString(". ")) }
             }
             mode.contains("navig") || mode.contains("walk") -> {
                 append("Scene: ")
-                if (labels.isNotEmpty()) append(labels.take(3).map { it.substringBefore(" (") }.joinToString(", "))
-                if (objects.isNotEmpty()) { append(". Objects: "); append(objects.take(4).joinToString("; ")) }
+                if (labels.isNotEmpty())
+                    append(labels.take(3).joinToString(", ") { it.substringBefore(" (") })
+                if (objects.isNotEmpty()) {
+                    append(". Objects: ")
+                    append(objects.take(4).joinToString("; "))
+                }
                 append(". Proceed carefully.")
             }
             else -> {
                 if (labels.isNotEmpty()) {
                     append("Scene contains: ")
-                    append(labels.take(5).map { it.substringBefore(" (") }.joinToString(", "))
+                    append(labels.take(5).joinToString(", ") { it.substringBefore(" (") })
                     append(". ")
                 }
                 if (objects.isNotEmpty()) {
-                    append("Objects detected: ")
+                    append("Objects: ")
                     append(objects.take(4).joinToString("; "))
                     append(". ")
                 }
@@ -234,9 +198,4 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
             }
         }
     }
-
-    // ── Utility ────────────────────────────────────────────────────────────
-
-    private suspend fun mainResult(result: Result, block: (Result) -> Unit) =
-        withContext(Dispatchers.Main) { block(result) }
 }

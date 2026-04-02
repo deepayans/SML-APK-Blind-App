@@ -22,10 +22,11 @@ android {
         applicationId = "com.example.vision_assistant"
         minSdk = 26
         targetSdk = 34
-        // flutter.versionCode / flutter.versionName are Kotlin properties in
-        // Flutter's Gradle plugin — do NOT call .toInteger() (Groovy syntax).
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        // Hardcoded to avoid flutter.versionCode type ambiguity in Kotlin DSL.
+        // Flutter 3.22 exposes versionCode as a method returning String in
+        // some plugin variants — using a literal Int is always safe.
+        versionCode = 1
+        versionName = "1.0.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")
@@ -39,17 +40,6 @@ android {
             isShrinkResources = false
         }
     }
-
-    packaging {
-        jniLibs {
-            pickFirsts += setOf(
-                "lib/arm64-v8a/libc++_shared.so",
-                "lib/armeabi-v7a/libc++_shared.so",
-                "lib/x86/libc++_shared.so",
-                "lib/x86_64/libc++_shared.so"
-            )
-        }
-    }
 }
 
 flutter {
@@ -57,7 +47,12 @@ flutter {
 }
 
 dependencies {
-    // ML Kit — all offline, bundled with the library, no runtime download
+    // vision-common must be pinned explicitly — it provides InputImage.width/height
+    // which are used in MlcLlmPlugin.  Without this the transitive version from
+    // image-labeling may be too old (pre-17.3) and those properties won't resolve.
+    implementation("com.google.mlkit:vision-common:17.3.0")
+
+    // Core ML Kit detectors — all fully offline, zero runtime download
     implementation("com.google.mlkit:image-labeling:17.0.8")
     implementation("com.google.mlkit:object-detection:17.0.1")
     implementation("com.google.mlkit:text-recognition:16.0.0")
