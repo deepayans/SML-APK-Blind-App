@@ -18,7 +18,7 @@ class ModelDownloader {
   static const String _modelFolder   = 'gemma-mediapipe';
 
   // Approx size — used for progress display only
-  static const int _approxBytes = 1_500_000_000;
+  static const int _approxBytes = 1500000000;
 
   static Future<String> getModelPath() async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -31,7 +31,7 @@ class ModelDownloader {
   static Future<bool> isModelDownloaded() async {
     final file = File(await _filePath());
     // Must exist and be at least 1 GB to be considered complete
-    return file.existsSync() && file.lengthSync() > 1_000_000_000;
+    return file.existsSync() && file.lengthSync() > 1000000000;
   }
 
   static int getTotalSize() => _approxBytes;
@@ -45,7 +45,7 @@ class ModelDownloader {
     // Resume support — send Range header if partial file exists
     final existing = file.existsSync() ? file.lengthSync() : 0;
 
-    if (existing > 1_000_000_000) {
+    if (existing > 1000000000) {
       yield DownloadProgress(progress: 1.0, downloaded: existing,
           total: existing, status: 'Already downloaded');
       return;
