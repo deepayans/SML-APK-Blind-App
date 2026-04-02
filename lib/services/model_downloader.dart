@@ -3,114 +3,84 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
-/// Downloads the Gemma 2B IT CPU INT4 model for MediaPipe Tasks GenAI.
+/// Downloads Gemma 2B IT CPU INT4 — the Small Language Model that powers
+/// natural language descriptions in the app.
 ///
-/// The model is a single ~1.5 GB .bin file in MediaPipe FlatBuffer format.
-/// It is loaded by [MlcLlmPlugin] via the MediaPipe LlmInference API.
-///
-/// The app works WITHOUT this model — ML Kit handles image analysis offline
-/// without any download.  Gemma is an enhancement that produces richer,
-/// more natural-sounding descriptions.
-///
-/// Download source: Google AI Edge / MediaPipe model gallery
-/// (publicly accessible, no authentication required)
+/// Source: Google AI Edge / MediaPipe model gallery (public, no auth needed)
+/// Format: MediaPipe LlmInference .bin file
+/// Size: ~1.5 GB (one-time download, works offline forever after)
 class ModelDownloader {
-  // Official Google AI Edge hosted Gemma 2B CPU INT4 task bundle.
-  // This URL is from Google's MediaPipe documentation examples.
   static const String _modelUrl =
       'https://storage.googleapis.com/mediapipe-models/'
       'llm_inference/gemma-2b-it-cpu-int4/float32/1/gemma-2b-it-cpu-int4.bin';
 
   static const String _modelFileName = 'gemma-2b-it-cpu-int4.bin';
-  static const String _modelFolder   = 'gemma-mediapipe-model';
+  static const String _modelFolder   = 'gemma-mediapipe';
 
-  // ~1.5 GB — used for progress display only
-  static const int _estimatedSize = 1500 * 1024 * 1024;
-
-  static Future<bool> isModelDownloaded() async {
-    final file = File(await _modelFilePath());
-    return file.existsSync() && file.lengthSync() > 100 * 1024 * 1024;
-  }
+  // Approx size — used for progress display only
+  static const int _approxBytes = 1_500_000_000;
 
   static Future<String> getModelPath() async {
-    // The plugin accepts either a file path or a directory path.
-    // Return the directory so the plugin can glob for *.bin / *.task.
     final appDir = await getApplicationDocumentsDirectory();
     return '${appDir.path}/$_modelFolder';
   }
 
-  static Future<String> _modelFilePath() async {
-    final dir = await getModelPath();
-    return '$dir/$_modelFileName';
+  static Future<String> _filePath() async =>
+      '${await getModelPath()}/$_modelFileName';
+
+  static Future<bool> isModelDownloaded() async {
+    final file = File(await _filePath());
+    // Must exist and be at least 1 GB to be considered complete
+    return file.existsSync() && file.lengthSync() > 1_000_000_000;
   }
 
-  static int getTotalSize() => _estimatedSize;
+  static int getTotalSize() => _approxBytes;
 
   static Stream<DownloadProgress> downloadModel() async* {
-    final modelPath  = await getModelPath();
-    final filePath   = await _modelFilePath();
-    final modelDir   = Directory(modelPath);
-    final outFile    = File(filePath);
+    final dir  = Directory(await getModelPath());
+    final file = File(await _filePath());
 
-    if (!await modelDir.exists()) await modelDir.create(recursive: true);
+    if (!await dir.exists()) await dir.create(recursive: true);
 
-    // Resume download if partial file exists
-    final existingBytes = await outFile.exists() ? await outFile.length() : 0;
+    // Resume support — send Range header if partial file exists
+    final existing = file.existsSync() ? file.lengthSync() : 0;
 
-    if (existingBytes > 100 * 1024 * 1024) {
-      // Already downloaded
-      yield DownloadProgress(
-        progress: 1.0,
-        status: 'Already downloaded',
-        downloadedBytes: existingBytes,
-        totalBytes: _estimatedSize,
-      );
+    if (existing > 1_000_000_000) {
+      yield DownloadProgress(progress: 1.0, downloaded: existing,
+          total: existing, status: 'Already downloaded');
       return;
     }
 
-    yield DownloadProgress(
-      progress: 0.0,
-      status: 'Connecting…',
-      downloadedBytes: 0,
-      totalBytes: _estimatedSize,
-    );
+    yield DownloadProgress(progress: 0.0, downloaded: existing,
+        total: _approxBytes, status: 'Connecting…');
 
     final request = http.Request('GET', Uri.parse(_modelUrl));
-    if (existingBytes > 0) {
-      // Range request for resumption
-      request.headers['Range'] = 'bytes=$existingBytes-';
-    }
+    if (existing > 0) request.headers['Range'] = 'bytes=$existing-';
 
     final response = await http.Client().send(request);
-
     if (response.statusCode != 200 && response.statusCode != 206) {
       throw Exception('Download failed: HTTP ${response.statusCode}');
     }
 
-    final totalBytes = (response.contentLength ?? _estimatedSize) + existingBytes;
-    int downloaded   = existingBytes;
-
-    final sink = outFile.openWrite(mode: existingBytes > 0 ? FileMode.append : FileMode.write);
+    final total      = (response.contentLength ?? _approxBytes) + existing;
+    int downloaded   = existing;
+    final sink       = file.openWrite(
+        mode: existing > 0 ? FileMode.append : FileMode.write);
 
     await for (final chunk in response.stream) {
       sink.add(chunk);
       downloaded += chunk.length;
       yield DownloadProgress(
-        progress: (downloaded / totalBytes).clamp(0.0, 1.0),
+        progress: (downloaded / total).clamp(0.0, 1.0),
+        downloaded: downloaded,
+        total: total,
         status: 'Downloading Gemma 2B…',
-        downloadedBytes: downloaded,
-        totalBytes: totalBytes,
       );
     }
-
     await sink.close();
 
-    yield DownloadProgress(
-      progress: 1.0,
-      status: 'Download complete!',
-      downloadedBytes: downloaded,
-      totalBytes: downloaded,
-    );
+    yield DownloadProgress(progress: 1.0, downloaded: downloaded,
+        total: downloaded, status: 'Complete!');
   }
 
   static Future<void> deleteModel() async {
@@ -119,26 +89,22 @@ class ModelDownloader {
   }
 }
 
-// ── Data classes ──────────────────────────────────────────────────────────────
-
 class DownloadProgress {
   final double progress;
+  final int downloaded;
+  final int total;
   final String status;
-  final int downloadedBytes;
-  final int totalBytes;
-
   const DownloadProgress({
     required this.progress,
+    required this.downloaded,
+    required this.total,
     required this.status,
-    required this.downloadedBytes,
-    required this.totalBytes,
   });
-
-  String get downloadedMB => '${(downloadedBytes / 1024 / 1024).toStringAsFixed(0)} MB';
-  String get totalMB      => '${(totalBytes      / 1024 / 1024).toStringAsFixed(0)} MB';
+  String get downloadedMB => '${(downloaded / 1e6).toStringAsFixed(0)} MB';
+  String get totalMB      => '${(total      / 1e6).toStringAsFixed(0)} MB';
 }
 
-// ── Download screen ───────────────────────────────────────────────────────────
+// ── Mandatory first-launch download screen ────────────────────────────────────
 
 class ModelDownloadScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -151,22 +117,15 @@ class ModelDownloadScreen extends StatefulWidget {
 class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
   DownloadProgress? _progress;
   String? _error;
-  bool _skipped = false;
 
   @override
   void initState() {
     super.initState();
-    _checkAndMaybeDownload();
-  }
-
-  Future<void> _checkAndMaybeDownload() async {
-    if (await ModelDownloader.isModelDownloaded()) {
-      widget.onComplete();
-    }
+    _startDownload();
   }
 
   Future<void> _startDownload() async {
-    setState(() { _error = null; _skipped = false; });
+    setState(() => _error = null);
     try {
       await for (final p in ModelDownloader.downloadModel()) {
         if (!mounted) return;
@@ -181,90 +140,109 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
     }
   }
 
-  void _skip() {
-    setState(() => _skipped = true);
-    widget.onComplete();
-  }
-
   @override
   Widget build(BuildContext context) {
     final pct = ((_progress?.progress ?? 0) * 100).toInt();
 
     return Scaffold(
-      backgroundColor: const Color(0xFF121212),
+      backgroundColor: const Color(0xFF0A0A1A),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.psychology_rounded, size: 64, color: Colors.blue),
-              const SizedBox(height: 24),
-              const Text(
-                'Optional: Enhanced AI',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+              // Icon
+              Container(
+                width: 80, height: 80,
+                decoration: BoxDecoration(
+                  color: Colors.blue.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(Icons.psychology_rounded,
+                    size: 48, color: Colors.blue),
               ),
-              const SizedBox(height: 12),
-              const Text(
-                'Download Gemma 2B for richer descriptions.\n'
-                'The app already works without it via on-device ML.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white60, fontSize: 14),
-              ),
-              const SizedBox(height: 40),
-              if (_progress != null) ...[
-                LinearProgressIndicator(
-                  value: _progress!.progress,
-                  minHeight: 10,
-                  backgroundColor: Colors.grey[800],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  '$pct%  ·  ${_progress!.downloadedMB} / ${_progress!.totalMB}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _progress!.status,
-                  style: const TextStyle(color: Colors.white38, fontSize: 12),
-                ),
-              ],
-              if (_error != null) ...[
-                const SizedBox(height: 20),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.red.withOpacity(0.3)),
-                  ),
-                  child: Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
-                ),
-              ],
               const SizedBox(height: 32),
+
+              // Title
+              const Text('Setting Up Vision AI',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold,
+                    color: Colors.white),
+                textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+
+              // Subtitle
+              const Text(
+                'Downloading Gemma 2B — the Small Language Model\n'
+                'that powers accurate scene descriptions.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white60, fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: 48),
+
+              // Progress bar
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: _progress?.progress ?? 0,
+                  minHeight: 10,
+                  backgroundColor: Colors.white12,
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Stats
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _skip,
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.white54),
-                      child: const Text('Skip for now'),
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _progress == null || _error != null ? _startDownload : null,
-                      child: Text(_error != null ? 'Retry' : 'Download (~1.5 GB)'),
-                    ),
+                  Text('$pct%',
+                      style: const TextStyle(color: Colors.white70, fontSize: 14)),
+                  Text(
+                    '${_progress?.downloadedMB ?? "0 MB"}'
+                    ' / ${_progress?.totalMB ?? "~1500 MB"}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 8),
+              Text(
+                _progress?.status ?? 'Preparing…',
+                style: const TextStyle(color: Colors.white38, fontSize: 12),
+              ),
+
+              // Error
+              if (_error != null) ...[
+                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.withOpacity(0.3)),
+                  ),
+                  child: Column(children: [
+                    const Icon(Icons.error_outline, color: Colors.red),
+                    const SizedBox(height: 8),
+                    Text(_error!,
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
+                        textAlign: TextAlign.center),
+                    const SizedBox(height: 12),
+                    ElevatedButton.icon(
+                      onPressed: _startDownload,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Retry'),
+                    ),
+                  ]),
+                ),
+              ],
+
+              const SizedBox(height: 48),
               const Text(
-                'One-time download. Works offline forever after.',
+                'One-time download · ~1.5 GB · WiFi recommended\n'
+                'Works fully offline after this.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white24, fontSize: 12),
+                style: TextStyle(color: Colors.white24, fontSize: 12, height: 1.6),
               ),
             ],
           ),

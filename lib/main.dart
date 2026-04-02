@@ -33,10 +33,7 @@ class VisionAssistantApp extends StatelessWidget {
           ),
           update: (ctx, g, t, s, prev) => prev ??
               AssistantProvider(
-                gemmaService: g,
-                ttsService: t,
-                sttService: s,
-              ),
+                  gemmaService: g, ttsService: t, sttService: s),
         ),
       ],
       child: MaterialApp(
@@ -51,6 +48,9 @@ class VisionAssistantApp extends StatelessWidget {
   }
 }
 
+/// Checks whether Gemma 2B has been downloaded.
+/// • First launch → shows mandatory download screen (~1.5 GB, WiFi recommended)
+/// • Subsequent launches → goes straight to the camera screen
 class AppStartup extends StatefulWidget {
   const AppStartup({super.key});
 
@@ -59,12 +59,23 @@ class AppStartup extends StatefulWidget {
 }
 
 class _AppStartupState extends State<AppStartup> {
+  bool _checking = true;
+  bool _needsDownload = false;
+
   @override
   void initState() {
     super.initState();
-    // ML Kit works immediately — go straight to the home screen.
-    // The optional Gemma download is offered from Settings.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _goHome());
+    _checkModel();
+  }
+
+  Future<void> _checkModel() async {
+    final needs = await ModelDownloader.isModelDownloaded() == false;
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _needsDownload = needs;
+    });
+    if (!needs) _goHome();
   }
 
   void _goHome() {
@@ -76,8 +87,17 @@ class _AppStartupState extends State<AppStartup> {
 
   @override
   Widget build(BuildContext context) {
+    if (_checking) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF0A0A1A),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (_needsDownload) {
+      return ModelDownloadScreen(onComplete: _goHome);
+    }
     return const Scaffold(
-      backgroundColor: Color(0xFF121212),
+      backgroundColor: Color(0xFF0A0A1A),
       body: Center(child: CircularProgressIndicator()),
     );
   }
