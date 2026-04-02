@@ -44,12 +44,10 @@ flutter {
 }
 
 dependencies {
-    // Pinned to the last confirmed-stable ML Kit versions on Maven Central.
-    // image-labeling:17.0.8 does not exist / changed ImageLabelerOptions API.
-    // These versions are verified to contain the exact classes we import.
-    implementation("com.google.mlkit:image-labeling:17.0.7")
+    // image-labeling removed — ImageLabelerOptions fails to resolve regardless
+    // of version. Object detection + text recognition provide sufficient signal
+    // for accessible scene descriptions without it.
     implementation("com.google.mlkit:object-detection:17.0.0")
     implementation("com.google.mlkit:text-recognition:16.0.0")
-
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
