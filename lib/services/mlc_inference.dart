@@ -31,11 +31,12 @@ class MlcInference {
   /// Send [imageBytes] (JPEG from the camera) and [prompt] to the native
   /// MLC engine for vision inference.
   ///
+  /// No [_isLoaded] guard here — the native plugin (MlcLlmPlugin.kt) handles
+  /// analysis via ML Kit even when Gemma is not loaded. Blocking here would
+  /// prevent the app from working until the optional 1.5 GB model is downloaded.
+  ///
   /// Returns the model's text response. Throws on failure.
   Future<String> analyzeImage(Uint8List imageBytes, String prompt) async {
-    if (!_isLoaded) {
-      throw Exception('Model not loaded. Call loadModel() first.');
-    }
     try {
       final result = await _channel.invokeMethod<String>('analyzeImage', {
         'imageBytes': imageBytes,
