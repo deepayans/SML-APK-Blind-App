@@ -22,8 +22,8 @@ android {
         applicationId = "com.example.vision_assistant"
         minSdk = 26
         targetSdk = 35
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
+        versionCode = flutter.versionCode()
+        versionName = flutter.versionName()
 
         ndk {
             abiFilters += listOf("arm64-v8a")
