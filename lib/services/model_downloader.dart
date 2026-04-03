@@ -172,7 +172,7 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
                 textAlign: TextAlign.center),
               const SizedBox(height: 12),
               const Text(
-                'Downloading Gemma 2B — the Small Language Model\n'
+                'Downloading Gemma 3 1B — the Small Language Model\n'
                 'that powers accurate, natural scene descriptions.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white60, fontSize: 14, height: 1.5),
@@ -234,7 +234,7 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
 
               const SizedBox(height: 48),
               const Text(
-                'One-time download · ~1.5 GB · WiFi recommended\n'
+                'One-time download · ~555 GB · WiFi recommended\n'
                 'No account needed. Works fully offline after this.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white24, fontSize: 12, height: 1.6),
