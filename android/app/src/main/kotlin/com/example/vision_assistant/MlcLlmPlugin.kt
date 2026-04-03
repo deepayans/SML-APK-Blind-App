@@ -26,30 +26,27 @@ private const val TAG = "VisionPlugin"
 /**
  * Two-stage on-device vision pipeline:
  *
- * Stage 1 — ML Kit SML (instant, always available):
- *   • Object Detection  → what objects exist and where (left/centre/right, near/far)
- *   • Text Recognition  → any readable text in the frame
+ *   Stage 1 — ML Kit (instant, no download):
+ *     Object Detection + Text Recognition → structured scene data
  *
- * Stage 2 — Gemma 2B SLM via MediaPipe (after one-time download):
- *   • Takes ML Kit's structured detections as a prompt
- *   • Generates fluent, context-aware natural language descriptions
- *   • Runs fully offline after the ~1.5 GB model is downloaded
- *
- * If Gemma has not been downloaded yet, Stage 1 output is returned directly
- * as a structured fallback so the app is never completely silent.
+ *   Stage 2 — Gemma 2B via MediaPipe LlmInference (after first-launch download):
+ *     Structured detections → fluent natural-language description
+ *     Runs fully offline after the ~1.5 GB model is in place.
  */
 class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
 
-    // Single-threaded to serialise LLM calls (LlmInference is not thread-safe)
-    private val llmThread = Dispatchers.IO.limitedParallelism(1)
-    private val scope     = CoroutineScope(llmThread + SupervisorJob())
+    // LlmInference is NOT thread-safe — keep all LLM calls on one thread.
+    // ML Kit tasks run on their own IO threads via the Task API so they
+    // don't need to share this dispatcher.
+    private val llmDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var llm: LlmInference? = null
 
-    // ── ML Kit detectors (lazy, stateless, thread-safe) ───────────────────
+    // ── ML Kit clients ────────────────────────────────────────────────────
 
     private val objectDetector by lazy {
         ObjectDetection.getClient(
@@ -75,7 +72,7 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        scope.launch { llm?.close(); llm = null }
+        scope.launch(llmDispatcher) { llm?.close(); llm = null }
         scope.cancel()
     }
 
@@ -84,56 +81,55 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
             "loadModel" -> {
-                val modelPath = call.argument<String>("modelPath")
+                val path = call.argument<String>("modelPath")
                     ?: return result.error("INVALID_ARGUMENT", "modelPath required", null)
-                loadModel(modelPath, result)
+                handleLoadModel(path, result)
             }
             "analyzeImage" -> {
-                val imageBytes = call.argument<ByteArray>("imageBytes")
+                val bytes = call.argument<ByteArray>("imageBytes")
                     ?: return result.error("INVALID_ARGUMENT", "imageBytes required", null)
                 val prompt = call.argument<String>("prompt") ?: "Describe this image"
-                analyzeImage(imageBytes, prompt, result)
+                handleAnalyzeImage(bytes, prompt, result)
             }
             "isModelLoaded" -> result.success(llm != null)
-            "unloadModel"   -> unloadModel(result)
+            "unloadModel"   -> handleUnload(result)
             "generateText"  -> {
                 val prompt = call.argument<String>("prompt")
                     ?: return result.error("INVALID_ARGUMENT", "prompt required", null)
-                generateText(prompt, result)
+                handleGenerateText(prompt, result)
             }
             else -> result.notImplemented()
         }
     }
 
-    // ── loadModel — initialise Gemma 2B via MediaPipe LlmInference ────────
+    // ── loadModel ─────────────────────────────────────────────────────────
 
-    private fun loadModel(modelPath: String, result: Result) {
-        scope.launch {
+    private fun handleLoadModel(modelPath: String, result: Result) {
+        scope.launch(llmDispatcher) {
             try {
-                // Accept a directory path (find .bin inside) or a direct file path
                 val modelFile = resolveModelFile(modelPath)
-                    ?: return@launch main(result) {
-                        it.error("MODEL_NOT_FOUND",
-                            "No .bin model file found in $modelPath", null)
+                    ?: return@launch reply(result) {
+                        it.error("MODEL_NOT_FOUND", "No .bin file in $modelPath", null)
                     }
 
-                Log.i(TAG, "Loading Gemma from: ${modelFile.absolutePath}")
+                Log.i(TAG, "Loading Gemma: ${modelFile.absolutePath}")
                 llm?.close()
 
+                // Only setModelPath and setMaxTokens are available in tasks-genai 0.10.14.
+                // setTopK / setTemperature were added in later versions — omitting them
+                // prevents NoSuchMethodError crashes.
                 val options = LlmInference.LlmInferenceOptions.builder()
                     .setModelPath(modelFile.absolutePath)
                     .setMaxTokens(512)
-                    .setTopK(40)
-                    .setTemperature(0.8f)
                     .build()
 
                 llm = LlmInference.createFromOptions(context, options)
-                Log.i(TAG, "Gemma loaded successfully")
-                main(result) { it.success(true) }
+                Log.i(TAG, "Gemma loaded OK")
+                reply(result) { it.success(true) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "loadModel failed: ${e.message}")
-                main(result) { it.error("LOAD_ERROR", e.message, null) }
+                Log.e(TAG, "loadModel: ${e.message}")
+                reply(result) { it.error("LOAD_ERROR", e.message ?: "Load failed", null) }
             }
         }
     }
@@ -141,16 +137,17 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
     private fun resolveModelFile(path: String): File? {
         val f = File(path)
         return when {
-            f.isFile -> f
+            f.isFile      -> f
             f.isDirectory -> f.listFiles()
                 ?.firstOrNull { it.extension == "bin" || it.extension == "task" }
-            else -> null
+            else          -> null
         }
     }
 
     // ── analyzeImage — ML Kit → Gemma pipeline ────────────────────────────
 
-    private fun analyzeImage(imageBytes: ByteArray, prompt: String, result: Result) {
+    private fun handleAnalyzeImage(imageBytes: ByteArray, prompt: String, result: Result) {
+        // Stage 1 runs on general IO threads (ML Kit is thread-safe)
         scope.launch {
             try {
                 val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
@@ -160,89 +157,70 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 val h = bitmap.height
                 val image = InputImage.fromBitmap(bitmap, 0)
 
-                // Stage 1: ML Kit (parallel)
-                val objJob  = async(Dispatchers.IO) { detectObjects(image, w, h) }
-                val txtJob  = async(Dispatchers.IO) { recognizeText(image) }
-                val objects = objJob.await()
-                val texts   = txtJob.await()
+                // Run both ML Kit tasks in parallel on IO
+                val objDeferred = async { detectObjects(image, w, h) }
+                val txtDeferred = async { recognizeText(image) }
+                val objects = objDeferred.await()
+                val texts   = txtDeferred.await()
                 bitmap.recycle()
 
-                // Stage 2: Gemma generates fluent description from detections
-                val response = if (llm != null) {
-                    val gemmaPrompt = buildGemmaPrompt(objects, texts, prompt)
-                    llm!!.generateResponse(gemmaPrompt)
-                } else {
-                    // Gemma not yet downloaded — return ML Kit result directly
-                    buildFallback(objects, texts, prompt)
+                // Stage 2: run Gemma on its dedicated single-threaded dispatcher
+                val response = withContext(llmDispatcher) {
+                    val model = llm
+                    if (model != null) {
+                        val gemmaPrompt = buildGemmaPrompt(objects, texts, prompt)
+                        model.generateResponse(gemmaPrompt)
+                    } else {
+                        buildFallback(objects, texts, prompt)
+                    }
                 }
 
-                main(result) { it.success(response.trim()) }
+                reply(result) { it.success(response.trim()) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "analyzeImage error: ${e.message}")
-                main(result) { it.error("INFERENCE_ERROR", e.message, null) }
+                Log.e(TAG, "analyzeImage: ${e.message}")
+                reply(result) { it.error("INFERENCE_ERROR", e.message ?: "Analysis failed", null) }
             }
         }
     }
 
-    // ── Gemma prompt builder ──────────────────────────────────────────────
+    // ── Gemma prompt ──────────────────────────────────────────────────────
 
-    private fun buildGemmaPrompt(
-        objects: List<String>,
-        texts: List<String>,
-        userRequest: String
-    ): String {
-        // Build the detections section exactly as shown in the pipeline spec:
-        //   Scene detections: Objects: person at centre, close; chair at left
-        //   Visible text: EXIT | PUSH TO OPEN
-        val detectionLines = buildString {
-            when {
-                objects.isNotEmpty() -> {
-                    append("Scene detections: Objects: ${objects.joinToString("; ")}")
-                    appendLine()
-                    if (texts.isNotEmpty()) appendLine("Visible text: ${texts.joinToString(" | ")}")
-                }
-                texts.isNotEmpty() -> {
-                    appendLine("Scene detections: No objects detected.")
-                    appendLine("Visible text: ${texts.joinToString(" | ")}")
-                }
-                else -> appendLine("Scene detections: No objects or text detected.")
-            }
+    private fun buildGemmaPrompt(objects: List<String>, texts: List<String>, task: String): String {
+        val detections = buildString {
+            if (objects.isNotEmpty()) appendLine("Objects: ${objects.joinToString("; ")}")
+            if (texts.isNotEmpty())   appendLine("Visible text: ${texts.joinToString(" | ")}")
+            if (objects.isEmpty() && texts.isEmpty()) appendLine("No objects or text detected.")
         }.trim()
 
-        return """You are a vision assistant for a visually impaired person. \
-Be concise and specific. Mention spatial positions (left, right, centre, near, far). \
-Highlight hazards first. Keep the response to 2–3 sentences.
+        return """You are a vision assistant for a visually impaired person.
+Be concise (2-3 sentences). State positions (left/right/centre, near/far). Mention hazards first.
 
-$detectionLines
-Task: $userRequest
-
-Response:""".trimIndent()
+Scene: $detections
+Task: $task
+Response:"""
     }
 
     // ── ML Kit helpers ────────────────────────────────────────────────────
 
-    private suspend fun detectObjects(
-        image: InputImage,
-        bitmapWidth: Int,
-        bitmapHeight: Int
-    ): List<String> = suspendCoroutine { cont ->
-        objectDetector.process(image)
-            .addOnSuccessListener { detected ->
-                cont.resume(detected.map { obj ->
-                    val label = obj.labels.firstOrNull()?.text ?: "object"
-                    val cx    = obj.boundingBox.exactCenterX()
-                    val pos   = when {
-                        cx < bitmapWidth * 0.33f -> "left"
-                        cx < bitmapWidth * 0.66f -> "centre"
-                        else                      -> "right"
-                    }
-                    val near  = obj.boundingBox.height() > bitmapHeight * 0.4f
-                    "$label at $pos${if (near) ", close" else ""}"
-                })
-            }
-            .addOnFailureListener { cont.resumeWithException(it) }
-    }
+    private suspend fun detectObjects(image: InputImage, w: Int, h: Int): List<String> =
+        suspendCoroutine { cont ->
+            objectDetector.process(image)
+                .addOnSuccessListener { items ->
+                    cont.resume(items.map { obj ->
+                        val label = obj.labels.firstOrNull()?.text ?: "object"
+                        val cx = obj.boundingBox.exactCenterX()
+                        val pos = when {
+                            cx < w * 0.33f -> "left"
+                            cx < w * 0.66f -> "centre"
+                            else -> "right"
+                        }
+                        val near = obj.boundingBox.height() > h * 0.4f
+                        "$label at $pos${if (near) ", close" else ""}"
+                    })
+                }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
 
     private suspend fun recognizeText(image: InputImage): List<String> =
         suspendCoroutine { cont ->
@@ -257,59 +235,50 @@ Response:""".trimIndent()
                 .addOnFailureListener { cont.resumeWithException(it) }
         }
 
-    // ── Fallback when Gemma not downloaded ────────────────────────────────
+    // ── Fallback (Gemma not yet downloaded) ───────────────────────────────
 
-    private fun buildFallback(
-        objects: List<String>,
-        texts: List<String>,
-        prompt: String
-    ): String = buildString {
-        val mode = prompt.lowercase()
-        when {
-            mode.contains("text") || mode.contains("read") -> {
-                if (texts.isEmpty()) append("No text detected.")
-                else { append("Text: "); append(texts.joinToString(". ")) }
-            }
-            mode.contains("navig") || mode.contains("walk") -> {
-                if (objects.isEmpty()) append("Path appears clear. Proceed carefully.")
-                else { append("Objects ahead: "); append(objects.take(5).joinToString("; ")) }
-            }
-            else -> {
-                if (objects.isNotEmpty()) {
-                    append("Detected: "); append(objects.take(5).joinToString("; ")); append(". ")
+    private fun buildFallback(objects: List<String>, texts: List<String>, prompt: String): String =
+        buildString {
+            val mode = prompt.lowercase()
+            when {
+                mode.contains("text") || mode.contains("read") -> {
+                    if (texts.isEmpty()) append("No text detected.")
+                    else { append("Text: "); append(texts.joinToString(". ")) }
                 }
-                if (texts.isNotEmpty()) {
-                    append("Text: "); append(texts.take(3).joinToString(". "))
+                mode.contains("navig") || mode.contains("walk") -> {
+                    if (objects.isEmpty()) append("Path clear. Proceed carefully.")
+                    else { append("Objects: "); append(objects.take(5).joinToString("; ")) }
                 }
-                if (isEmpty()) append("Nothing clearly detected. Move closer.")
+                else -> {
+                    if (objects.isNotEmpty()) { append("Detected: "); append(objects.take(5).joinToString("; ")); append(". ") }
+                    if (texts.isNotEmpty()) { append("Text: "); append(texts.take(3).joinToString(". ")) }
+                    if (isEmpty()) append("Nothing clearly detected. Move closer.")
+                }
             }
         }
-    }
 
-    // ── generateText ──────────────────────────────────────────────────────
+    // ── generateText / unload ─────────────────────────────────────────────
 
-    private fun generateText(prompt: String, result: Result) {
-        scope.launch {
-            val model = llm ?: return@launch main(result) {
+    private fun handleGenerateText(prompt: String, result: Result) {
+        scope.launch(llmDispatcher) {
+            val model = llm ?: return@launch reply(result) {
                 it.error("MODEL_NOT_LOADED", "Gemma not loaded", null)
             }
             try {
-                main(result) { it.success(model.generateResponse(prompt)) }
+                reply(result) { it.success(model.generateResponse(prompt)) }
             } catch (e: Exception) {
-                main(result) { it.error("INFERENCE_ERROR", e.message, null) }
+                reply(result) { it.error("INFERENCE_ERROR", e.message ?: "Failed", null) }
             }
         }
     }
 
-    // ── unloadModel ───────────────────────────────────────────────────────
-
-    private fun unloadModel(result: Result) {
-        scope.launch {
-            try { llm?.close(); llm = null; main(result) { it.success(true) } }
-            catch (e: Exception) { main(result) { it.error("UNLOAD_ERROR", e.message, null) } }
+    private fun handleUnload(result: Result) {
+        scope.launch(llmDispatcher) {
+            try { llm?.close(); llm = null; reply(result) { it.success(true) } }
+            catch (e: Exception) { reply(result) { it.error("UNLOAD_ERROR", e.message, null) } }
         }
     }
 
-    private suspend fun main(result: Result, block: (Result) -> Unit) =
+    private suspend fun reply(result: Result, block: (Result) -> Unit) =
         withContext(Dispatchers.Main) { block(result) }
 }
