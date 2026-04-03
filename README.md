@@ -49,12 +49,13 @@ You’ll need:
 - Built on GitHub using the Flutter framework  
 - An Android device or emulator for running the app
 
+---
 
 ⚙️ Usage
 
 Once installed on your device:
 
-Launch the app.
-Navigate using accessibility gestures or voice commands.
-Load and install APKs from your device storage or project releases.
-The app assists with navigation and app interaction — optimised for accessibility and screen readers.
+1. Launch the app.
+2. Navigate using accessibility gestures or voice commands.
+3. Load and install APKs from your device storage or project releases.
+4. The app assists with navigation and app interaction — optimised for accessibility and screen readers.
