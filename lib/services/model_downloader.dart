@@ -11,14 +11,13 @@ import 'package:http/http.dart' as http;
 /// Size:   ~1.5 GB one-time download, works fully offline after that.
 class ModelDownloader {
   // Publicly accessible — no Hugging Face account or token needed.
-  static const String _modelUrl =
-      'https://storage.googleapis.com/mediapipe-models/'
-      'llm_inference/gemma-2b-it-cpu-int4/float32/1/'
-      'gemma-2b-it-cpu-int4.bin';
+static const String _modelUrl =
+    'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/'
+    'Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task';
 
-  static const String _modelFileName = 'gemma-2b-it-cpu-int4.bin';
+  static const String _modelFileName = 'Gemma3-1B-IT_q4.task';
   static const String _modelFolder   = 'gemma-mediapipe';
-  static const int    _approxBytes   = 1500000000; // ~1.5 GB for progress display
+  static const int    _approxBytes   = 555000000; // ~555 MB
 
   static Future<String> getModelPath() async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -32,7 +31,7 @@ class ModelDownloader {
   /// (guards against incomplete previous downloads).
   static Future<bool> isModelDownloaded() async {
     final file = File(await _filePath());
-    return file.existsSync() && file.lengthSync() > 1000000000;
+    return file.existsSync() && file.lengthSync() > 500000000;
   }
 
   static int getTotalSize() => _approxBytes;
@@ -48,7 +47,7 @@ class ModelDownloader {
     // Resume support
     final existing = file.existsSync() ? file.lengthSync() : 0;
 
-    if (existing > 1000000000) {
+   if (existing > 500000000) {
       yield DownloadProgress(progress: 1.0, downloaded: existing,
           total: existing, status: 'Already downloaded');
       return;
