@@ -12,7 +12,7 @@ import 'package:http/http.dart' as http;
 class ModelDownloader {
   // Publicly accessible — no Hugging Face account or token needed.
 static const String _modelUrl =
-    'https://huggingface.co/litert-community/Gemma3-1B-IT/resolve/main/'
+    'https://github.com/deepayans/SML-APK-Blind-App/releases/download/v1.0.0/'
     'Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task';
 
   static const String _modelFileName = 'Gemma3-1B-IT_q4.task';
