@@ -13,11 +13,11 @@ class ModelDownloader {
   // Publicly accessible — no Hugging Face account or token needed.
 static const String _modelUrl =
     'https://github.com/deepayans/SML-APK-Blind-App/releases/download/v1.0.0/'
-    'Gemma3-1B-IT_multi-prefill-seq_q4_ekv2048.task';
+    'gemma-2b-it-cpu-int4.bin';
 
-  static const String _modelFileName = 'Gemma3-1B-IT_q4.task';
+  static const String _modelFileName = 'gemma-2b-it-cpu-int4.bin';
   static const String _modelFolder   = 'gemma-mediapipe';
-  static const int    _approxBytes   = 555000000; // ~555 MB
+  static const int    _approxBytes   = 1350000000; // ~1.35 GB
 
   static Future<String> getModelPath() async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -31,7 +31,7 @@ static const String _modelUrl =
   /// (guards against incomplete previous downloads).
   static Future<bool> isModelDownloaded() async {
     final file = File(await _filePath());
-    return file.existsSync() && file.lengthSync() > 500000000;
+    return file.existsSync() && file.lengthSync() > 1300000000;
   }
 
   static int getTotalSize() => _approxBytes;
@@ -47,7 +47,7 @@ static const String _modelUrl =
     // Resume support
     final existing = file.existsSync() ? file.lengthSync() : 0;
 
-   if (existing > 500000000) {
+   if (existing > 1300000000) {
       yield DownloadProgress(progress: 1.0, downloaded: existing,
           total: existing, status: 'Already downloaded');
       return;
