@@ -43,17 +43,18 @@ flutter {
 }
 
 dependencies {
-    // ── Vision SML (ML Kit) — offline, zero download, instant ─────────────
-    // These small on-device models extract structured data from the camera:
-    // object positions and any visible text.  Results feed into Gemma.
+    // ── Vision ML (ML Kit) ─────────────────────────────────────────────────
+    // Two small on-device vision models — zero extra download required.
+    // They extract structured scene data (objects + text) from the camera.
     implementation("com.google.mlkit:object-detection:17.0.0")
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
-    // ── Language SML (MediaPipe Gemma 2B) — downloaded on first launch ────
-    // Gemma 2B turns the ML Kit detections into fluent natural language.
-    // Jetifier MUST be disabled (gradle.properties) — MediaPipe is already
-    // AndroidX and Jetifier's ASM transformer crashes on its bytecode.
-    implementation("com.google.mediapipe:tasks-genai:0.10.14")
+    // ── Language SLM (Gemma 2B via Google AI Edge) ─────────────────────────
+    // tasks-genai 0.10.8 is the oldest/most stable published version.
+    // It uses Google's LiteRT (Lite RunTime) engine internally — same engine
+    // as TensorFlow Lite, just rebranded. No cloud calls, no API keys.
+    // Jetifier is disabled in gradle.properties (mandatory for this dep).
+    implementation("com.google.mediapipe:tasks-genai:0.10.8")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
