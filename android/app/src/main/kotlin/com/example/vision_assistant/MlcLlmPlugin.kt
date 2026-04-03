@@ -8,6 +8,8 @@ import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOp
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession.LlmInferenceSessionOptions
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.label.ImageLabeling
+import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
 import com.google.mlkit.vision.text.TextRecognition
@@ -30,6 +32,7 @@ private const val TAG = "VisionPlugin"
  *
  * Stage 1 — ML Kit (instant, no download):
  *   • Object Detection  — finds objects and their bounding-box positions
+ *   • Image Labeling    — identifies specific objects (person, chair, tv…)
  *   • Text Recognition  — reads visible text (OCR)
  *
  * Stage 2 — Gemma 3 1B via MediaPipe tasks-genai 0.10.22:
@@ -65,7 +68,14 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
             ObjectDetectorOptions.Builder()
                 .setDetectorMode(ObjectDetectorOptions.SINGLE_IMAGE_MODE)
                 .enableMultipleObjects()
-                .enableClassification()
+                .build()
+        )
+    }
+
+    private val imageLabeler by lazy {
+        ImageLabeling.getClient(
+            ImageLabelerOptions.Builder()
+                .setConfidenceThreshold(0.6f)
                 .build()
         )
     }
@@ -171,10 +181,12 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 val h = bitmap.height
                 val image = InputImage.fromBitmap(bitmap, 0)
 
-                // Stage 1: ML Kit in parallel — both detectors are thread-safe.
-                val objJob = async { detectObjects(image, w, h) }
-                val txtJob = async { recognizeText(image) }
+                // Stage 1: ML Kit in parallel — all detectors are thread-safe.
+                val objJob   = async { detectObjects(image, w, h) }
+                val labelJob = async { labelImage(image) }
+                val txtJob   = async { recognizeText(image) }
                 val objects = objJob.await()
+                val labels  = labelJob.await()
                 val texts   = txtJob.await()
                 bitmap.recycle()
 
@@ -188,23 +200,23 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                         try {
                             val gemmaResponse = runWithSession(engine) { session ->
                                 // Use Gemma's chat template — required for instruction-tuned models.
-                                session.addQueryChunk(buildGemmaPrompt(objects, texts, prompt))
+                                session.addQueryChunk(buildGemmaPrompt(objects, labels, texts, prompt))
                                 session.generateResponse()  // tasks-genai 0.10.22: no arguments
                             }
                             // Guard against empty / whitespace-only Gemma output
                             if (gemmaResponse.isNullOrBlank()) {
                                 Log.w(TAG, "Gemma returned empty response — falling back to ML Kit")
-                                buildFallback(objects, texts, prompt)
+                                buildFallback(objects, labels, texts, prompt)
                             } else {
                                 gemmaResponse
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Gemma inference failed, falling back to ML Kit: ${e.message}", e)
-                            buildFallback(objects, texts, prompt)
+                            buildFallback(objects, labels, texts, prompt)
                         }
                     } else {
                         // Gemma not yet loaded — return ML Kit structured output directly.
-                        buildFallback(objects, texts, prompt)
+                        buildFallback(objects, labels, texts, prompt)
                     }
                 }
 
@@ -250,11 +262,12 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
      * Without this template Gemma 3 instruction-tuned models produce
      * garbled, repetitive, or empty output.
      */
-    private fun buildGemmaPrompt(objects: List<String>, texts: List<String>, task: String): String {
+    private fun buildGemmaPrompt(objects: List<String>, labels: List<String>, texts: List<String>, task: String): String {
         val scene = buildString {
-            if (objects.isNotEmpty()) appendLine("Detected objects: ${objects.joinToString("; ")}")
+            if (labels.isNotEmpty())  appendLine("Identified: ${labels.joinToString(", ")}")
+            if (objects.isNotEmpty()) appendLine("Object positions: ${objects.joinToString("; ")}")
             if (texts.isNotEmpty())   appendLine("Visible text: ${texts.joinToString(" | ")}")
-            if (objects.isEmpty() && texts.isEmpty()) appendLine("Nothing detected by on-device vision.")
+            if (labels.isEmpty() && objects.isEmpty() && texts.isEmpty()) appendLine("Nothing detected by on-device vision.")
         }.trim()
 
         val userMessage = """
@@ -272,12 +285,12 @@ Task: $task
 
     // ── ML Kit helpers ─────────────────────────────────────────────────────
 
+    /** Object Detection — returns spatial positions only (left/centre/right, near/far). */
     private suspend fun detectObjects(image: InputImage, w: Int, h: Int): List<String> =
         suspendCoroutine { cont ->
             objectDetector.process(image)
                 .addOnSuccessListener { items ->
-                    cont.resume(items.map { obj ->
-                        val label = obj.labels.firstOrNull()?.text ?: "unknown object"
+                    cont.resume(items.mapIndexed { i, obj ->
                         val cx = obj.boundingBox.exactCenterX()
                         val pos = when {
                             cx < w * 0.33f -> "left"
@@ -285,8 +298,20 @@ Task: $task
                             else           -> "right"
                         }
                         val near = obj.boundingBox.height() > h * 0.4f
-                        "$label at $pos${if (near) ", close" else ""}"
+                        "object ${i + 1} at $pos${if (near) ", close" else ""}"
                     })
+                }
+                .addOnFailureListener { cont.resumeWithException(it) }
+        }
+
+    /** Image Labeling — returns specific labels (person, chair, tv, …). */
+    private suspend fun labelImage(image: InputImage): List<String> =
+        suspendCoroutine { cont ->
+            imageLabeler.process(image)
+                .addOnSuccessListener { items ->
+                    cont.resume(
+                        items.take(8).map { it.text }
+                    )
                 }
                 .addOnFailureListener { cont.resumeWithException(it) }
         }
@@ -307,7 +332,7 @@ Task: $task
 
     // ── ML Kit-only fallback (Gemma not yet loaded) ────────────────────────
 
-    private fun buildFallback(objects: List<String>, texts: List<String>, prompt: String): String =
+    private fun buildFallback(objects: List<String>, labels: List<String>, texts: List<String>, prompt: String): String =
         buildString {
             val mode = prompt.lowercase()
             when {
@@ -317,11 +342,21 @@ Task: $task
                 }
                 mode.contains("navig") || mode.contains("walk") -> {
                     if (objects.isEmpty()) append("Path appears clear. Proceed with caution.")
-                    else { append("Objects ahead: "); append(objects.take(5).joinToString("; ")) }
+                    else {
+                        if (labels.isNotEmpty()) {
+                            append("Detected ahead: ${labels.take(5).joinToString(", ")}. ")
+                        }
+                        append("Positions: ${objects.take(5).joinToString("; ")}")
+                    }
                 }
                 else -> {
-                    if (objects.isNotEmpty()) {
+                    if (labels.isNotEmpty()) {
                         append("Detected: ")
+                        append(labels.take(6).joinToString(", "))
+                        append(". ")
+                    }
+                    if (objects.isNotEmpty()) {
+                        append("Positions: ")
                         append(objects.take(5).joinToString("; "))
                         append(". ")
                     }

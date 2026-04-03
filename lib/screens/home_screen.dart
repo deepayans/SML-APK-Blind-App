@@ -189,26 +189,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
 
-              // ── Result display (shown after each analysis) ──────────
-              if (provider.lastResponse.isNotEmpty && !provider.isProcessing)
-                Positioned(
-                  left: 16, right: 16,
-                  bottom: MediaQuery.of(context).padding.bottom + 140,
-                  child: Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withOpacity(0.75),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.blue.withOpacity(0.4)),
-                    ),
-                    child: Text(
-                      provider.lastResponse,
-                      style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4),
-                      textAlign: TextAlign.left,
-                    ),
-                  ),
-                ),
-
               // ── Bottom controls ─────────────────────────────────────
               Positioned(
                 bottom: 0, left: 0, right: 0,

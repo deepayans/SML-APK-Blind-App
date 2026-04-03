@@ -44,9 +44,12 @@ flutter {
 
 dependencies {
     // ── Vision ML (ML Kit) ─────────────────────────────────────────────────
-    // Two small on-device vision models — zero extra download required.
-    // They extract structured scene data (objects + text) from the camera.
+    // On-device vision models — zero extra download required.
+    // Object Detection: bounding boxes → spatial positions (left/centre/right)
+    // Image Labeling:   400+ categories → specific labels (person, chair, tv…)
+    // Text Recognition: OCR → reads visible text
     implementation("com.google.mlkit:object-detection:17.0.0")
+    implementation("com.google.mlkit:image-labeling:17.0.8")
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
     // ── Language SLM (Gemma 2B via Google AI Edge) ─────────────────────────
