@@ -75,7 +75,7 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
     private val imageLabeler by lazy {
         ImageLabeling.getClient(
             ImageLabelerOptions.Builder()
-                .setConfidenceThreshold(0.6f)
+                .setConfidenceThreshold(0.5f)
                 .build()
         )
     }
@@ -153,7 +153,7 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 // and token budget. Temperature / topK belong on LlmInferenceSessionOptions.
                 val options = LlmInferenceOptions.builder()
                     .setModelPath(file.absolutePath)
-                    .setMaxTokens(1024)
+                    .setMaxTokens(2048)
                     .build()
 
                 llmInference = LlmInference.createFromOptions(context, options)
@@ -279,9 +279,9 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 }
                 bitmaps.forEach { it.recycle() }
 
-                val uniqueObjects = allObjects.distinct().take(8)
-                val uniqueLabels  = allLabels.toList().take(10)
-                val uniqueTexts   = allTexts.toList().take(10)
+                val uniqueObjects = allObjects.distinct().take(12)
+                val uniqueLabels  = allLabels.toList().take(15)
+                val uniqueTexts   = allTexts.toList().take(15)
 
                 Log.i(TAG, "Burst merged: ${uniqueLabels.size} labels, " +
                         "${uniqueObjects.size} positions, ${uniqueTexts.size} texts")
@@ -360,7 +360,9 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
         val userMessage = """
 You are a vision assistant for a visually impaired person.
-Respond in 2-3 sentences only. State positions (left, centre, right) and distance (near, far). Mention hazards first.
+Respond in 3-5 clear sentences. Mention hazards and obstacles first.
+State positions (left, centre, right) and distance (near, far).
+Name every identified object and read any visible text.
 
 Scene:
 $scene
@@ -398,7 +400,7 @@ Task: $task
             imageLabeler.process(image)
                 .addOnSuccessListener { items ->
                     cont.resume(
-                        items.take(8).map { it.text }
+                        items.take(12).map { it.text }
                     )
                 }
                 .addOnFailureListener { cont.resumeWithException(it) }

@@ -48,7 +48,7 @@ class _HomeScreenState extends State<HomeScreen> {
         (c) => c.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
-      _cameraController = CameraController(back, ResolutionPreset.medium, enableAudio: false);
+      _cameraController = CameraController(back, ResolutionPreset.high, enableAudio: false);
       await _cameraController!.initialize();
       if (mounted) setState(() => _isCameraReady = true);
     } catch (e) {
@@ -61,16 +61,18 @@ class _HomeScreenState extends State<HomeScreen> {
     final provider = context.read<AssistantProvider>();
     if (provider.isProcessing) return;
     try {
-      // Burst capture: 3 frames over ~2s for comprehensive scene analysis.
-      // Multiple frames catch different angles / focus points and let
-      // ML Kit accumulate more labels, objects and text.
+      // Burst capture: 5 frames over ~4–5s for maximum scene detail.
+      // More frames = more diverse angles / focus points = richer ML Kit
+      // detections. The 1 s gap lets autofocus settle between shots.
+      // Gemma inference (the real bottleneck) only runs once at the end,
+      // so extra frames add minimal overhead.
       final frames = <Uint8List>[];
-      for (int i = 0; i < 3; i++) {
+      for (int i = 0; i < 5; i++) {
         try {
           final image = await _cameraController!.takePicture();
           frames.add(await image.readAsBytes());
         } catch (_) {} // skip individual failed frames
-        if (i < 2) await Future.delayed(const Duration(milliseconds: 700));
+        if (i < 4) await Future.delayed(const Duration(milliseconds: 1000));
       }
       if (frames.isNotEmpty) {
         await provider.analyzeImageBurst(frames);
