@@ -179,13 +179,28 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 bitmap.recycle()
 
                 // Stage 2: Gemma via session on the single-threaded dispatcher.
+                // If Gemma inference fails at runtime (OOM, model error, empty
+                // response, etc.) we fall back to the ML Kit structured output
+                // so the user always gets *something* spoken back.
                 val response = withContext(llmDispatcher) {
                     val engine = llmInference
                     if (engine != null) {
-                        runWithSession(engine) { session ->
-                            // Use Gemma's chat template — required for instruction-tuned models.
-                            session.addQueryChunk(buildGemmaPrompt(objects, texts, prompt))
-                            session.generateResponse()  // tasks-genai 0.10.22: no arguments
+                        try {
+                            val gemmaResponse = runWithSession(engine) { session ->
+                                // Use Gemma's chat template — required for instruction-tuned models.
+                                session.addQueryChunk(buildGemmaPrompt(objects, texts, prompt))
+                                session.generateResponse()  // tasks-genai 0.10.22: no arguments
+                            }
+                            // Guard against empty / whitespace-only Gemma output
+                            if (gemmaResponse.isNullOrBlank()) {
+                                Log.w(TAG, "Gemma returned empty response — falling back to ML Kit")
+                                buildFallback(objects, texts, prompt)
+                            } else {
+                                gemmaResponse
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Gemma inference failed, falling back to ML Kit: ${e.message}", e)
+                            buildFallback(objects, texts, prompt)
                         }
                     } else {
                         // Gemma not yet loaded — return ML Kit structured output directly.

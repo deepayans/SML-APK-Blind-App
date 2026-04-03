@@ -129,19 +129,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(Icons.smart_toy_outlined),
-                    title: Text("Gemma 2B IT CPU INT4 (optional)"),
+                    title: Text("Gemma 3 1B IT INT4"),
                     subtitle: Text("On-device language model for richer descriptions"),
                   ),
                   Divider(),
                   Text(
                     "Without Gemma the app works using ML Kit alone — "
                     "objects and text are detected and spoken directly.\n\n"
-                    "To enable Gemma for natural language descriptions:\n"
-                    "1. Accept the licence at kaggle.com/models/google/gemma/tfLite\n"
-                    "2. Download  gemma-2b-it-cpu-int4.bin  (~1.5 GB)\n"
-                    "3. Copy the file to your phone and place it at:\n"
-                    "   /sdcard/Download/gemma-mediapipe/gemma-2b-it-cpu-int4.bin\n\n"
-                    "The app detects the file automatically on next launch.",
+                    "Gemma 3 1B (~555 MB) is downloaded automatically on "
+                    "first launch via the setup screen. After the one-time "
+                    "download everything works fully offline.\n\n"
+                    "Requires an arm64 device with 4 GB+ RAM.",
                     style: TextStyle(fontSize: 13, height: 1.5, color: Colors.white70),
                   ),
                 ],
@@ -159,7 +157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const ListTile(
               leading: Icon(Icons.smart_toy_outlined),
               title: Text("AI Model"),
-              subtitle: Text("Gemma 2B IT CPU INT4 (on-device)")),
+              subtitle: Text("Gemma 3 1B IT INT4 (on-device)")),
         ],
       ),
     );
