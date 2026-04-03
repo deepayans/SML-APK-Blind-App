@@ -1,11 +1,12 @@
 package com.example.vision_assistant
 
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession.LlmInferenceSessionOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.objects.ObjectDetection
 import com.google.mlkit.vision.objects.defaults.ObjectDetectorOptions
@@ -28,30 +29,36 @@ private const val TAG = "VisionPlugin"
  * Two-stage fully offline vision pipeline.
  *
  * Stage 1 — ML Kit (instant, no download):
- *   • Object Detection  — finds objects and their positions
- *   • Text Recognition  — reads any visible text (OCR)
+ *   • Object Detection  — finds objects and their bounding-box positions
+ *   • Text Recognition  — reads visible text (OCR)
  *
- * Stage 2 — Gemma 2B SLM via Google AI Edge / LiteRT (first-launch download):
- *   • Receives ML Kit detections as a structured prompt
- *   • Generates fluent natural-language descriptions
- *   • Fully offline after the one-time ~1.5 GB download
- *   • Uses LiteRT (Google's on-device inference engine) — no cloud, no API key
+ * Stage 2 — Gemma 3 1B via MediaPipe tasks-genai 0.10.22:
+ *   • Session-based API: LlmInference (engine) + LlmInferenceSession (per request)
+ *   • Prompt uses Gemma's required chat template (<start_of_turn>user/model)
+ *   • Fully offline after the one-time ~555 MB download
  *
- * If the model hasn't been downloaded yet, Stage 1 output is returned as-is.
+ * API note (tasks-genai 0.10.22+):
+ *   The old llmInference.generateResponse(prompt) API was removed.
+ *   Correct flow:
+ *     val session = LlmInferenceSession.createFromOptions(llmInference, sessionOptions)
+ *     session.addQueryChunk(prompt)
+ *     val response = session.generateResponse()   // no arguments
+ *     session.close()
  */
 class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     private lateinit var channel: MethodChannel
     private lateinit var context: Context
 
-    // Gemma is NOT thread-safe — all LLM calls on one dedicated thread
+    // All LLM work on a single-threaded dispatcher — LlmInference is NOT thread-safe.
     private val llmDispatcher = Dispatchers.IO.limitedParallelism(1)
-    // ML Kit is thread-safe — runs on general IO pool
+    // ML Kit is thread-safe — runs on general IO pool.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private var gemma: LlmInference? = null
+    // The model engine — initialised once in loadGemma(), reused across all requests.
+    private var llmInference: LlmInference? = null
 
-    // ── ML Kit (lazy, reused across calls) ───────────────────────────────
+    // ── ML Kit detectors (lazy, reused) ───────────────────────────────────
 
     private val objectDetector by lazy {
         ObjectDetection.getClient(
@@ -67,7 +74,7 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
-    // ── Plugin lifecycle ──────────────────────────────────────────────────
+    // ── Plugin lifecycle ───────────────────────────────────────────────────
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
@@ -77,11 +84,14 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         channel.setMethodCallHandler(null)
-        scope.launch(llmDispatcher) { gemma?.close(); gemma = null }
+        scope.launch(llmDispatcher) {
+            runCatching { llmInference?.close() }
+            llmInference = null
+        }
         scope.cancel()
     }
 
-    // ── Method dispatch ───────────────────────────────────────────────────
+    // ── Method dispatch ────────────────────────────────────────────────────
 
     override fun onMethodCall(call: MethodCall, result: Result) {
         when (call.method) {
@@ -93,10 +103,10 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
             "analyzeImage" -> {
                 val bytes = call.argument<ByteArray>("imageBytes")
                     ?: return result.error("INVALID_ARGUMENT", "imageBytes required", null)
-                val prompt = call.argument<String>("prompt") ?: "Describe this image"
+                val prompt = call.argument<String>("prompt") ?: "Describe this image."
                 analyzeImage(bytes, prompt, result)
             }
-            "isModelLoaded" -> result.success(gemma != null)
+            "isModelLoaded" -> result.success(llmInference != null)
             "unloadModel"   -> unload(result)
             "generateText"  -> {
                 val prompt = call.argument<String>("prompt")
@@ -107,32 +117,33 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         }
     }
 
-    // ── Load Gemma 2B ─────────────────────────────────────────────────────
+    // ── Load Gemma engine ──────────────────────────────────────────────────
 
     private fun loadGemma(modelPath: String, result: Result) {
         scope.launch(llmDispatcher) {
             try {
                 val file = findModelFile(modelPath)
                     ?: return@launch reply(result) {
-                        it.error("MODEL_NOT_FOUND", "No .bin file found in $modelPath", null)
+                        it.error("MODEL_NOT_FOUND",
+                            "No .task or .bin model file found in: $modelPath", null)
                     }
 
-                Log.i(TAG, "Loading Gemma 2B from: ${file.absolutePath}")
-                gemma?.close()
+                Log.i(TAG, "Loading Gemma from: ${file.absolutePath}")
+                runCatching { llmInference?.close() }
 
-                // LlmInferenceOptions in tasks-genai 0.10.8:
-                // Only setModelPath and setMaxTokens are safe to call.
+                // tasks-genai 0.10.22: engine-level options only contain model path
+                // and token budget. Temperature / topK belong on LlmInferenceSessionOptions.
                 val options = LlmInferenceOptions.builder()
                     .setModelPath(file.absolutePath)
-                    .setMaxTokens(512)
+                    .setMaxTokens(1024)
                     .build()
 
-                gemma = LlmInference.createFromOptions(context, options)
-                Log.i(TAG, "Gemma 2B loaded successfully")
+                llmInference = LlmInference.createFromOptions(context, options)
+                Log.i(TAG, "Gemma engine loaded successfully")
                 reply(result) { it.success(true) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "loadGemma failed: ${e.message}")
+                Log.e(TAG, "loadGemma failed: ${e.message}", e)
                 reply(result) { it.error("LOAD_ERROR", e.message ?: "Load failed", null) }
             }
         }
@@ -143,36 +154,41 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         return when {
             f.isFile      -> f
             f.isDirectory -> f.listFiles()
-                ?.firstOrNull { it.extension == "bin" || it.extension == "task" }
+                ?.firstOrNull { it.extension == "task" || it.extension == "bin" }
             else          -> null
         }
     }
 
-    // ── analyzeImage: ML Kit → Gemma pipeline ────────────────────────────
+    // ── analyzeImage: ML Kit → Gemma pipeline ─────────────────────────────
 
     private fun analyzeImage(imageBytes: ByteArray, prompt: String, result: Result) {
         scope.launch {
             try {
                 val bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
-                    ?: throw Exception("Could not decode image")
+                    ?: throw Exception("Could not decode image bytes.")
 
                 val w = bitmap.width
                 val h = bitmap.height
                 val image = InputImage.fromBitmap(bitmap, 0)
 
-                // Stage 1: run both ML Kit tasks in parallel (thread-safe)
+                // Stage 1: ML Kit in parallel — both detectors are thread-safe.
                 val objJob = async { detectObjects(image, w, h) }
                 val txtJob = async { recognizeText(image) }
                 val objects = objJob.await()
                 val texts   = txtJob.await()
                 bitmap.recycle()
 
-                // Stage 2: switch to single-threaded LLM dispatcher for Gemma
+                // Stage 2: Gemma via session on the single-threaded dispatcher.
                 val response = withContext(llmDispatcher) {
-                    val model = gemma
-                    if (model != null) {
-                        model.generateResponse(buildPrompt(objects, texts, prompt))
+                    val engine = llmInference
+                    if (engine != null) {
+                        runWithSession(engine) { session ->
+                            // Use Gemma's chat template — required for instruction-tuned models.
+                            session.addQueryChunk(buildGemmaPrompt(objects, texts, prompt))
+                            session.generateResponse()  // tasks-genai 0.10.22: no arguments
+                        }
                     } else {
+                        // Gemma not yet loaded — return ML Kit structured output directly.
                         buildFallback(objects, texts, prompt)
                     }
                 }
@@ -180,7 +196,7 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 reply(result) { it.success(response.trim()) }
 
             } catch (e: Exception) {
-                Log.e(TAG, "analyzeImage error: ${e.message}")
+                Log.e(TAG, "analyzeImage error: ${e.message}", e)
                 reply(result) {
                     it.error("INFERENCE_ERROR", e.message ?: "Analysis failed", null)
                 }
@@ -188,32 +204,66 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
         }
     }
 
-    // ── Gemma prompt ──────────────────────────────────────────────────────
-
-    private fun buildPrompt(objects: List<String>, texts: List<String>, task: String): String {
-        val scene = buildString {
-            if (objects.isNotEmpty()) appendLine("Objects: ${objects.joinToString("; ")}")
-            if (texts.isNotEmpty())   appendLine("Text visible: ${texts.joinToString(" | ")}")
-            if (objects.isEmpty() && texts.isEmpty()) appendLine("Nothing detected.")
-        }.trim()
-
-        return """You are a vision assistant for a visually impaired person.
-Be concise (2-3 sentences). State positions (left/right/centre, near/far). Mention hazards first.
-
-Scene: $scene
-Task: $task
-Response:"""
+    /**
+     * Creates a fresh [LlmInferenceSession], runs [block], then closes it.
+     *
+     * A new session per request prevents conversation history from bleeding
+     * across unrelated scene descriptions.
+     * Must be called on [llmDispatcher] — sessions are not thread-safe.
+     */
+    private fun runWithSession(engine: LlmInference, block: (LlmInferenceSession) -> String): String {
+        val sessionOptions = LlmInferenceSessionOptions.builder()
+            .setTopK(40)
+            .setTemperature(0.7f)
+            .build()
+        val session = LlmInferenceSession.createFromOptions(engine, sessionOptions)
+        return try {
+            block(session)
+        } finally {
+            runCatching { session.close() }
+        }
     }
 
-    // ── ML Kit helpers ────────────────────────────────────────────────────
+    // ── Gemma 3 prompt template ────────────────────────────────────────────
+
+    /**
+     * Wraps the scene context and task in Gemma 3's required chat template.
+     *
+     * Format:
+     *   <start_of_turn>user\n{text}<end_of_turn>\n<start_of_turn>model\n
+     *
+     * Without this template Gemma 3 instruction-tuned models produce
+     * garbled, repetitive, or empty output.
+     */
+    private fun buildGemmaPrompt(objects: List<String>, texts: List<String>, task: String): String {
+        val scene = buildString {
+            if (objects.isNotEmpty()) appendLine("Detected objects: ${objects.joinToString("; ")}")
+            if (texts.isNotEmpty())   appendLine("Visible text: ${texts.joinToString(" | ")}")
+            if (objects.isEmpty() && texts.isEmpty()) appendLine("Nothing detected by on-device vision.")
+        }.trim()
+
+        val userMessage = """
+You are a vision assistant for a visually impaired person.
+Respond in 2-3 sentences only. State positions (left, centre, right) and distance (near, far). Mention hazards first.
+
+Scene:
+$scene
+
+Task: $task
+        """.trimIndent()
+
+        return "<start_of_turn>user\n$userMessage<end_of_turn>\n<start_of_turn>model\n"
+    }
+
+    // ── ML Kit helpers ─────────────────────────────────────────────────────
 
     private suspend fun detectObjects(image: InputImage, w: Int, h: Int): List<String> =
         suspendCoroutine { cont ->
             objectDetector.process(image)
                 .addOnSuccessListener { items ->
                     cont.resume(items.map { obj ->
-                        val label = obj.labels.firstOrNull()?.text ?: "object"
-                        val cx  = obj.boundingBox.exactCenterX()
+                        val label = obj.labels.firstOrNull()?.text ?: "unknown object"
+                        val cx = obj.boundingBox.exactCenterX()
                         val pos = when {
                             cx < w * 0.33f -> "left"
                             cx < w * 0.66f -> "centre"
@@ -231,7 +281,8 @@ Response:"""
             textRecognizer.process(image)
                 .addOnSuccessListener { vt ->
                     cont.resume(
-                        vt.textBlocks.flatMap { it.lines }
+                        vt.textBlocks
+                            .flatMap { it.lines }
                             .map { it.text.trim() }
                             .filter { it.isNotBlank() }
                     )
@@ -239,19 +290,19 @@ Response:"""
                 .addOnFailureListener { cont.resumeWithException(it) }
         }
 
-    // ── Fallback: Gemma not yet downloaded ───────────────────────────────
+    // ── ML Kit-only fallback (Gemma not yet loaded) ────────────────────────
 
     private fun buildFallback(objects: List<String>, texts: List<String>, prompt: String): String =
         buildString {
             val mode = prompt.lowercase()
             when {
                 mode.contains("text") || mode.contains("read") -> {
-                    if (texts.isEmpty()) append("No text detected.")
+                    if (texts.isEmpty()) append("No text visible in this image.")
                     else { append("Text: "); append(texts.joinToString(". ")) }
                 }
                 mode.contains("navig") || mode.contains("walk") -> {
-                    if (objects.isEmpty()) append("Path clear. Proceed carefully.")
-                    else { append("Objects: "); append(objects.take(5).joinToString("; ")) }
+                    if (objects.isEmpty()) append("Path appears clear. Proceed with caution.")
+                    else { append("Objects ahead: "); append(objects.take(5).joinToString("; ")) }
                 }
                 else -> {
                     if (objects.isNotEmpty()) {
@@ -263,30 +314,39 @@ Response:"""
                         append("Text: ")
                         append(texts.take(3).joinToString(". "))
                     }
-                    if (isEmpty()) append("Nothing clearly detected. Move closer.")
+                    if (isEmpty()) append("Nothing clearly detected. Move closer or try again.")
                 }
             }
         }
 
-    // ── generateText / unload ─────────────────────────────────────────────
+    // ── generateText (voice commands, etc.) ───────────────────────────────
 
     private fun generateText(prompt: String, result: Result) {
         scope.launch(llmDispatcher) {
-            val model = gemma ?: return@launch reply(result) {
-                it.error("MODEL_NOT_LOADED", "Gemma not loaded yet", null)
+            val engine = llmInference ?: return@launch reply(result) {
+                it.error("MODEL_NOT_LOADED", "Gemma not loaded yet.", null)
             }
             try {
-                reply(result) { it.success(model.generateResponse(prompt)) }
+                val response = runWithSession(engine) { session ->
+                    session.addQueryChunk(
+                        "<start_of_turn>user\n$prompt<end_of_turn>\n<start_of_turn>model\n"
+                    )
+                    session.generateResponse()
+                }
+                reply(result) { it.success(response.trim()) }
             } catch (e: Exception) {
-                reply(result) { it.error("INFERENCE_ERROR", e.message ?: "Failed", null) }
+                reply(result) { it.error("INFERENCE_ERROR", e.message ?: "Generation failed", null) }
             }
         }
     }
 
+    // ── Unload ─────────────────────────────────────────────────────────────
+
     private fun unload(result: Result) {
         scope.launch(llmDispatcher) {
             try {
-                gemma?.close(); gemma = null
+                runCatching { llmInference?.close() }
+                llmInference = null
                 reply(result) { it.success(true) }
             } catch (e: Exception) {
                 reply(result) { it.error("UNLOAD_ERROR", e.message, null) }
