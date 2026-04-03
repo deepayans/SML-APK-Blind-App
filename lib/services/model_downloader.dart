@@ -3,21 +3,23 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 
-/// Downloads Gemma 2B IT CPU INT4 — the Small Language Model powering
+/// Downloads Gemma 2B IT CPU INT4 — the Small Language Model that powers
 /// natural language scene descriptions in Vision Assistant.
 ///
-/// Source: Google AI Edge public storage (no account, no token, no auth).
-/// Format: MediaPipe LlmInference .bin
-/// Size:   ~1.5 GB one-time download, works fully offline after that.
+/// Source: Google AI Edge public storage — no account, no token, no sign-in.
+/// Format: MediaPipe LlmInference .bin (compatible with tasks-genai:0.10.14)
+/// Size:   ~1.5 GB, one-time download, works fully offline after that.
 class ModelDownloader {
-  // Publicly accessible — no Hugging Face account or token needed.
-static const String _modelUrl =
-    'https://github.com/deepayans/SML-APK-Blind-App/releases/download/v1.0.0/'
-    'gemma3-1b-it-int4.task';
+  // Google AI Edge public URL — no authentication required.
+  // This is the exact model format supported by tasks-genai 0.10.14.
+  static const String _modelUrl =
+      'https://storage.googleapis.com/mediapipe-models/'
+      'llm_inference/gemma-2b-it-cpu-int4/float32/1/'
+      'gemma-2b-it-cpu-int4.bin';
 
-  static const String _modelFileName = 'gemma3-1b-it-int4.task';
+  static const String _modelFileName = 'gemma-2b-it-cpu-int4.bin';
   static const String _modelFolder   = 'gemma-mediapipe';
-  static const int    _approxBytes   = 555000000; // ~555 MB
+  static const int    _approxBytes   = 1500000000; // ~1.5 GB
 
   static Future<String> getModelPath() async {
     final appDir = await getApplicationDocumentsDirectory();
@@ -27,27 +29,23 @@ static const String _modelUrl =
   static Future<String> _filePath() async =>
       '${await getModelPath()}/$_modelFileName';
 
-  /// Returns true only when the file exists AND is at least 1 GB
-  /// (guards against incomplete previous downloads).
   static Future<bool> isModelDownloaded() async {
     final file = File(await _filePath());
-    return file.existsSync() && file.lengthSync() > 500000000;
+    // Must be at least 1 GB — guards against incomplete downloads
+    return file.existsSync() && file.lengthSync() > 1000000000;
   }
 
   static int getTotalSize() => _approxBytes;
 
-  /// Streams progress events while downloading.
-  /// Supports resuming — sends a Range header when a partial file exists.
   static Stream<DownloadProgress> downloadModel() async* {
     final dir  = Directory(await getModelPath());
     final file = File(await _filePath());
 
     if (!await dir.exists()) await dir.create(recursive: true);
 
-    // Resume support
     final existing = file.existsSync() ? file.lengthSync() : 0;
 
-   if (existing > 500000000) {
+    if (existing > 1000000000) {
       yield DownloadProgress(progress: 1.0, downloaded: existing,
           total: existing, status: 'Already downloaded');
       return;
@@ -62,8 +60,7 @@ static const String _modelUrl =
     final response = await http.Client().send(request);
 
     if (response.statusCode != 200 && response.statusCode != 206) {
-      throw Exception(
-          'Download failed: HTTP ${response.statusCode}. '
+      throw Exception('Download failed: HTTP ${response.statusCode}. '
           'Check your internet connection and try again.');
     }
 
@@ -95,8 +92,6 @@ static const String _modelUrl =
   }
 }
 
-// ── Progress model ─────────────────────────────────────────────────────────
-
 class DownloadProgress {
   final double progress;
   final int downloaded;
@@ -109,8 +104,6 @@ class DownloadProgress {
   String get downloadedMB => '${(downloaded / 1e6).toStringAsFixed(0)} MB';
   String get totalMB      => '${(total      / 1e6).toStringAsFixed(0)} MB';
 }
-
-// ── First-launch download screen ───────────────────────────────────────────
 
 class ModelDownloadScreen extends StatefulWidget {
   final VoidCallback onComplete;
@@ -149,7 +142,6 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
   @override
   Widget build(BuildContext context) {
     final pct = ((_progress?.progress ?? 0) * 100).toInt();
-
     return Scaffold(
       backgroundColor: const Color(0xFF0A0A1A),
       body: SafeArea(
@@ -172,14 +164,13 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
                 textAlign: TextAlign.center),
               const SizedBox(height: 12),
               const Text(
-                'Downloading Gemma 3 1B — the Small Language Model\n'
-                'that powers accurate, natural scene descriptions.',
+                'Downloading Gemma 2B — the Small Language Model\n'
+                'that powers accurate, natural scene descriptions.\n'
+                'No account needed.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white60, fontSize: 14, height: 1.5),
               ),
               const SizedBox(height: 48),
-
-              // Progress bar
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: LinearProgressIndicator(
@@ -196,17 +187,14 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
                   Text('$pct%',
                       style: const TextStyle(color: Colors.white70, fontSize: 14)),
                   Text(
-                    '${_progress?.downloadedMB ?? "0 MB"} / ${_progress?.totalMB ?? "~1500 MB"}',
+                    '${_progress?.downloadedMB ?? "0 MB"} / ~1500 MB',
                     style: const TextStyle(color: Colors.white70, fontSize: 14),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
-                _progress?.status ?? 'Starting download…',
-                style: const TextStyle(color: Colors.white38, fontSize: 12),
-              ),
-
+              Text(_progress?.status ?? 'Starting download…',
+                  style: const TextStyle(color: Colors.white38, fontSize: 12)),
               if (_error != null) ...[
                 const SizedBox(height: 24),
                 Container(
@@ -231,10 +219,9 @@ class _ModelDownloadScreenState extends State<ModelDownloadScreen> {
                   ]),
                 ),
               ],
-
               const SizedBox(height: 48),
               const Text(
-                'One-time download · ~555 GB · WiFi recommended\n'
+                'One-time download · ~1.5 GB · WiFi recommended\n'
                 'No account needed. Works fully offline after this.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white24, fontSize: 12, height: 1.6),

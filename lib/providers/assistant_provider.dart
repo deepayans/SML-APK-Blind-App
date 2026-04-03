@@ -35,17 +35,26 @@ class AssistantProvider extends ChangeNotifier {
     try {
       _statusMessage = 'Loading AI model...';
       notifyListeners();
-      
-      await gemmaService.loadModel();
+
       await ttsService.initialize();
-      
-      _isModelLoaded = true;
-      _statusMessage = 'Ready';
+
+      // Load Gemma SLM — non-fatal if it fails (ML Kit fallback still works)
+      try {
+        await gemmaService.loadModel();
+        _isModelLoaded = true;
+        _statusMessage = 'Ready';
+      } catch (e) {
+        // Model not downloaded yet or failed to load — that is OK.
+        // analyzeImage() will use ML Kit structured output as fallback.
+        _isModelLoaded = false;
+        _statusMessage = 'Ready (basic mode)';
+      }
+
       notifyListeners();
-      
       await ttsService.speak('Vision Assistant ready. Tap anywhere to analyze your surroundings.');
     } catch (e) {
-      _statusMessage = 'Error: $e';
+      _statusMessage = 'Ready';
+      _isModelLoaded = false;
       notifyListeners();
     }
   }
