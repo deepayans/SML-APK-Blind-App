@@ -223,7 +223,10 @@ Response:"""
                         "$label at $pos${if (near) ", close" else ""}"
                     })
                 }
-                .addOnFailureListener { cont.resumeWithException(it) }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "detectObjects failed (non-fatal): ${e.message}")
+                    cont.resume(emptyList())
+                }
         }
 
     private suspend fun recognizeText(image: InputImage): List<String> =
@@ -236,7 +239,10 @@ Response:"""
                             .filter { it.isNotBlank() }
                     )
                 }
-                .addOnFailureListener { cont.resumeWithException(it) }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "recognizeText failed (non-fatal): ${e.message}")
+                    cont.resume(emptyList())
+                }
         }
 
     // ── Fallback: Gemma not yet downloaded ───────────────────────────────
