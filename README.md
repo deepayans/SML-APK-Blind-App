@@ -2,7 +2,7 @@
 
 A simple Android application to support blind and visually impaired users by providing accessible interaction with APKs and assistive features.
 
-> This project aims to make an accessible Android APK package (SML) more usable for blind users with enhanced accessibility support, screen reading, and easy navigation.
+This project aims to make an accessible Android APK package (SML) more usable for blind users by enhancing accessibility support, screen reading, and navigation.
 
 ---
 
@@ -10,7 +10,7 @@ A simple Android application to support blind and visually impaired users by pro
 
 The **SML APK Blind App** is an Android project focused on improving accessibility and usability of Android applications (APKs) for blind or visually impaired users. The goal is to provide an intuitive interface, voice feedback, and accessibility‑first features to help users install, navigate, and run Android packages with confidence.
 
-The repository contains the Android source code, resources, and instructions to build and install the app.
+The repository contains the Android source code, resources, and instructions for building and installing the app.
 
 ---
 
