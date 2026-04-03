@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:provider/provider.dart';
@@ -60,9 +61,20 @@ class _HomeScreenState extends State<HomeScreen> {
     final provider = context.read<AssistantProvider>();
     if (provider.isProcessing) return;
     try {
-      final image = await _cameraController!.takePicture();
-      final bytes = await image.readAsBytes();
-      await provider.analyzeImage(bytes);
+      // Burst capture: 3 frames over ~2s for comprehensive scene analysis.
+      // Multiple frames catch different angles / focus points and let
+      // ML Kit accumulate more labels, objects and text.
+      final frames = <Uint8List>[];
+      for (int i = 0; i < 3; i++) {
+        try {
+          final image = await _cameraController!.takePicture();
+          frames.add(await image.readAsBytes());
+        } catch (_) {} // skip individual failed frames
+        if (i < 2) await Future.delayed(const Duration(milliseconds: 700));
+      }
+      if (frames.isNotEmpty) {
+        await provider.analyzeImageBurst(frames);
+      }
     } catch (e) {
       debugPrint('Capture error: $e');
     }

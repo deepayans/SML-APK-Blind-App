@@ -50,6 +50,13 @@ class GemmaService {
     return await _inference.analyzeImage(imageBytes, prompt);
   }
 
+  /// Burst analysis: sends multiple frames to the native plugin which runs
+  /// ML Kit on each, merges all detections, then runs Gemma once.
+  Future<String> analyzeBurst(List<Uint8List> frames, String mode) async {
+    final prompt = _modePrompt(mode);
+    return await _inference.analyzeBurst(frames, prompt);
+  }
+
   String _modePrompt(String mode) {
     switch (mode.toLowerCase()) {
       case 'scene':

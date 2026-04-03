@@ -102,6 +102,50 @@ class AssistantProvider extends ChangeNotifier {
     }
   }
 
+  /// Burst analysis: processes multiple frames captured over a short window,
+  /// merges ML Kit detections across all frames, and runs Gemma once on the
+  /// combined result for a richer, more reliable description.
+  Future<void> analyzeImageBurst(List<Uint8List> frames) async {
+    if (_isProcessing || frames.isEmpty) return;
+
+    _isProcessing = true;
+    _statusMessage = 'Analyzing...';
+    notifyListeners();
+
+    try {
+      await ttsService.speak('Scanning scene');
+
+      final response = await gemmaService.analyzeBurst(
+        frames,
+        _currentMode.name,
+      );
+
+      _lastResponse = response;
+      _statusMessage = 'Ready';
+      _isProcessing = false;
+      _history.insert(0, AnalysisResult(
+        description: response,
+        mode: _currentMode,
+        timestamp: DateTime.now(),
+      ));
+      notifyListeners();
+
+      await ttsService.speak(response);
+    } catch (e) {
+      final msg = e.toString().replaceAll('Exception:', '').trim();
+      _statusMessage = 'Error: $msg';
+      _isProcessing = false;
+      notifyListeners();
+      if (msg.contains('not loaded') || msg.contains('loadModel')) {
+        await ttsService.speak('AI model is not ready yet. Please wait.');
+      } else if (msg.contains('not downloaded')) {
+        await ttsService.speak('Model not downloaded. Please check your connection and retry setup.');
+      } else {
+        await ttsService.speak('Could not analyse the scene. Please try again.');
+      }
+    }
+  }
+
   Future<void> startVoiceCommand() async {
     await ttsService.stop();
     await ttsService.speak('Listening for command');

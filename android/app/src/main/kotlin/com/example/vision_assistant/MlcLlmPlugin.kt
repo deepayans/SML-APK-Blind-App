@@ -116,6 +116,14 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 val prompt = call.argument<String>("prompt") ?: "Describe this image."
                 analyzeImage(bytes, prompt, result)
             }
+            "analyzeBurst" -> {
+                val rawFrames = call.argument<List<Any>>("frames")
+                    ?: return result.error("INVALID_ARGUMENT", "frames required", null)
+                val frames = rawFrames.filterIsInstance<ByteArray>()
+                if (frames.isEmpty()) return result.error("INVALID_ARGUMENT", "no valid frames", null)
+                val prompt = call.argument<String>("prompt") ?: "Describe this image."
+                analyzeBurst(frames, prompt, result)
+            }
             "isModelLoaded" -> result.success(llmInference != null)
             "unloadModel"   -> unload(result)
             "generateText"  -> {
@@ -226,6 +234,86 @@ class MlcLlmPlugin : FlutterPlugin, MethodCallHandler {
                 Log.e(TAG, "analyzeImage error: ${e.message}", e)
                 reply(result) {
                     it.error("INFERENCE_ERROR", e.message ?: "Analysis failed", null)
+                }
+            }
+        }
+    }
+
+    // ── analyzeBurst: multi-frame ML Kit → merge → Gemma ──────────────────
+
+    /**
+     * Burst analysis: runs ML Kit on every frame, deduplicates the detections
+     * across all frames, then runs Gemma once on the merged result.
+     *
+     * More frames → more labels / text / object positions → richer output.
+     */
+    private fun analyzeBurst(frameList: List<ByteArray>, prompt: String, result: Result) {
+        scope.launch {
+            try {
+                val bitmaps = frameList.mapNotNull { bytes ->
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                }
+                if (bitmaps.isEmpty()) throw Exception("Could not decode any frames.")
+
+                // Run ML Kit on every frame in parallel and accumulate results.
+                val allLabels  = mutableSetOf<String>()
+                val allObjects = mutableListOf<String>()
+                val allTexts   = mutableSetOf<String>()
+
+                val frameJobs = bitmaps.map { bitmap ->
+                    async {
+                        val w = bitmap.width
+                        val h = bitmap.height
+                        val image = InputImage.fromBitmap(bitmap, 0)
+                        val o = async { detectObjects(image, w, h) }
+                        val l = async { labelImage(image) }
+                        val t = async { recognizeText(image) }
+                        Triple(o.await(), l.await(), t.await())
+                    }
+                }
+                frameJobs.forEach { job ->
+                    val (objs, lbls, txts) = job.await()
+                    allObjects.addAll(objs)
+                    allLabels.addAll(lbls)
+                    allTexts.addAll(txts)
+                }
+                bitmaps.forEach { it.recycle() }
+
+                val uniqueObjects = allObjects.distinct().take(8)
+                val uniqueLabels  = allLabels.toList().take(10)
+                val uniqueTexts   = allTexts.toList().take(10)
+
+                Log.i(TAG, "Burst merged: ${uniqueLabels.size} labels, " +
+                        "${uniqueObjects.size} positions, ${uniqueTexts.size} texts")
+
+                // Stage 2: single Gemma call on merged detections.
+                val response = withContext(llmDispatcher) {
+                    val engine = llmInference
+                    if (engine != null) {
+                        try {
+                            val gemmaResponse = runWithSession(engine) { session ->
+                                session.addQueryChunk(
+                                    buildGemmaPrompt(uniqueObjects, uniqueLabels, uniqueTexts, prompt))
+                                session.generateResponse()
+                            }
+                            if (gemmaResponse.isNullOrBlank()) {
+                                Log.w(TAG, "Gemma empty on burst — falling back to ML Kit")
+                                buildFallback(uniqueObjects, uniqueLabels, uniqueTexts, prompt)
+                            } else gemmaResponse
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Gemma burst inference failed: ${e.message}", e)
+                            buildFallback(uniqueObjects, uniqueLabels, uniqueTexts, prompt)
+                        }
+                    } else {
+                        buildFallback(uniqueObjects, uniqueLabels, uniqueTexts, prompt)
+                    }
+                }
+                reply(result) { it.success(response.trim()) }
+
+            } catch (e: Exception) {
+                Log.e(TAG, "analyzeBurst error: ${e.message}", e)
+                reply(result) {
+                    it.error("INFERENCE_ERROR", e.message ?: "Burst analysis failed", null)
                 }
             }
         }

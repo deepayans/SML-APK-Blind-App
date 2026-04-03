@@ -51,6 +51,23 @@ class MlcInference {
     }
   }
 
+  /// Burst analysis: sends multiple JPEG frames to the native side which
+  /// runs ML Kit on each, deduplicates detections, then runs Gemma once.
+  Future<String> analyzeBurst(List<Uint8List> frames, String prompt) async {
+    try {
+      final result = await _channel.invokeMethod<String>('analyzeBurst', {
+        'frames': frames,
+        'prompt': prompt,
+      });
+      if (result == null || result.isEmpty) {
+        throw Exception('Empty response from burst analysis.');
+      }
+      return result;
+    } on PlatformException catch (e) {
+      throw Exception('analyzeBurst failed [${e.code}]: ${e.message}');
+    }
+  }
+
   /// Generate text from [prompt] without an image (for voice commands, etc.).
   Future<String> generateText(String prompt) async {
     if (!_isLoaded) {
