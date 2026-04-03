@@ -33,29 +33,22 @@ class AssistantProvider extends ChangeNotifier {
 
   Future<void> initialize() async {
     try {
-      _statusMessage = 'Loading AI model...';
+      _statusMessage = 'Loading Gemma 3...';
       notifyListeners();
 
       await ttsService.initialize();
+      await gemmaService.loadModel();
 
-      // Load Gemma SLM — non-fatal if it fails (ML Kit fallback still works)
-      try {
-        await gemmaService.loadModel();
-        _isModelLoaded = true;
-        _statusMessage = 'Ready';
-      } catch (e) {
-        // Model not downloaded yet or failed to load — that is OK.
-        // analyzeImage() will use ML Kit structured output as fallback.
-        _isModelLoaded = false;
-        _statusMessage = 'Ready (basic mode)';
-      }
-
-      notifyListeners();
-      await ttsService.speak('Vision Assistant ready. Tap anywhere to analyze your surroundings.');
-    } catch (e) {
+      _isModelLoaded = true;
       _statusMessage = 'Ready';
-      _isModelLoaded = false;
       notifyListeners();
+
+      await ttsService.speak('Vision Assistant ready. Tap anywhere to analyse your surroundings.');
+    } catch (e) {
+      _isModelLoaded = false;
+      _statusMessage = 'Model failed to load: $e';
+      notifyListeners();
+      await ttsService.speak('Model failed to load. Please restart the app.');
     }
   }
 

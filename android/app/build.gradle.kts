@@ -50,12 +50,12 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.0")
 
     // ── Language SLM (Gemma 2B via Google AI Edge) ─────────────────────────
-    // tasks-genai:0.10.14 is the first version that introduced this artifact.
+    // tasks-genai:0.10.22 is the first version that introduced this artifact.
     // Requires android.enableJetifier=false (set in gradle.properties).
     // It uses Google's LiteRT (Lite RunTime) engine internally — same engine
     // as TensorFlow Lite, just rebranded. No cloud calls, no API keys.
     // Jetifier is disabled in gradle.properties (mandatory for this dep).
-    implementation("com.google.mediapipe:tasks-genai:0.10.14")
+    implementation("com.google.mediapipe:tasks-genai:0.10.22")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }
