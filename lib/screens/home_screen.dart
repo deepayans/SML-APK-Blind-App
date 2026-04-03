@@ -24,12 +24,22 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _initializeAll() async {
-    await _requestPermissions();
-    await _initializeCamera();
-    
-    if (mounted) {
-      await context.read<AssistantProvider>().initialize();
-      setState(() => _isInitializing = false);
+    try {
+      await _requestPermissions();
+      await _initializeCamera();
+      
+      if (mounted) {
+        try {
+          await context.read<AssistantProvider>().initialize();
+        } catch (e) {
+          debugPrint('Model init error: $e');
+          // Continue anyway - ML Kit fallback will work
+        }
+        setState(() => _isInitializing = false);
+      }
+    } catch (e) {
+      debugPrint('Initialization error: $e');
+      if (mounted) setState(() => _isInitializing = false);
     }
   }
 
