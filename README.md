@@ -1,61 +1,88 @@
-# SML APK Blind App
+# SML APK Blind App 🤖👁️
 
-A simple Android application to support blind and visually impaired users by providing accessible interaction with APKs and assistive features.
+## 📌 Overview
 
-This project aims to make an accessible Android APK package (SML) more usable for blind users by enhancing accessibility support, screen reading, and navigation.
-
----
-
-## 🔍 About
-
-The **SML APK Blind App** is an Android project focused on improving accessibility and usability of Android applications (APKs) for blind or visually impaired users. The goal is to provide an intuitive interface, voice feedback, and accessibility‑first features to help users install, navigate, and run Android packages with confidence.
-
-The repository contains the Android source code, resources, and instructions for building and installing the app.
+**SML APK Blind App** is an **Android application** designed to assist **visually impaired users**. It leverages **machine learning** and mobile camera features to help users understand and interact with their environment, providing accessibility support in real time.
 
 ---
 
-## 🧠 Features
+## 🚀 Features
 
-✔ Support for blind and visually impaired users  
-✔ Accessibility‑focused UI with TalkBack support (screen reader ready)  
-✔ Lightweight and easy to install APK  
-✔ Simple navigation with voice prompts  
-✔ Can help sideload APK files directly from GitHub releases
+* Object detection using camera
+* Text recognition (OCR) for reading signs, labels, and documents
+* Audio feedback to guide the user
+* Lightweight and mobile-friendly APK
+* User-friendly interface designed for accessibility
 
 ---
 
 ## 📁 Project Structure
 
-SML‑APK‑Blind‑App/
-├── app/ # Android app source code
-│ ├── src/
-│ ├── res/
-│ ├── AndroidManifest.xml
-├── gradle/
-├── .gitignore
-├── build.gradle
-├── settings.gradle
-└── README.md
+```
+├── app/                  # Android source code (Java/Kotlin)
+├── models/               # ML models used in the app
+├── assets/               # Images, icons, or other resources
+├── apk/                  # Prebuilt APK (if included)
+├── README.md             # This file
+```
 
 ---
 
-## 📦 Installation
+## ⚙️ Installation
 
-### Prerequisites
+1. Clone the repository:
 
-You’ll need:
+```bash
+git clone https://github.com/deepayans/SML-APK-Blind-App.git
+cd SML-APK-Blind-App
+```
 
-- Android Studio (Optional) 
-- Built on GitHub using the Flutter framework  
-- An Android device or emulator for running the app
+2. Open the project in **Android Studio**
+3. Build and run on an **Android device or emulator**
+4. Ensure necessary permissions (camera, storage, audio) are granted
+
+> ⚠️ APK may be directly installable if provided in the `apk/` folder.
 
 ---
 
-⚙️ Usage
+## 📊 How It Works
 
-Once installed on your device:
+1. The app uses the device camera to capture live images
+2. ML models process the images to detect objects or text
+3. Results are converted to **audio feedback** for the user
 
-1. Launch the app.
-2. Navigate using accessibility gestures or voice commands.
-3. Load and install APKs from your device storage or project releases.
-4. The app assists with navigation and app interaction — optimised for accessibility and screen readers.
+---
+
+## 🛠️ Technologies Used
+
+* Android Studio (Java/Kotlin)
+* TensorFlow Lite / ML Kit (for object detection / OCR)
+* CameraX API for live camera feed
+* Text-to-Speech for audio output
+
+---
+
+## 🔮 Future Improvements
+
+* Add more languages for OCR and audio feedback
+* Integrate navigation support for indoor/outdoor guidance
+* Enhance model accuracy and speed
+* UI improvements for accessibility
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Fork the repo and submit pull requests.
+
+---
+
+## 📄 License
+
+This project is licensed under the MIT License.
+
+---
+
+## 📬 Contact
+
+For questions or collaborations, reach out via GitHub.
