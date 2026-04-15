@@ -389,7 +389,10 @@ Task: $task
                         "object ${i + 1} at $pos${if (near) ", close" else ""}"
                     })
                 }
-                .addOnFailureListener { cont.resumeWithException(it) }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "detectObjects failed (non-fatal): ${e.message}")
+                    cont.resume(emptyList())
+                }
         }
 
     /** Image Labeling — returns specific labels (person, chair, tv, …). */
@@ -415,7 +418,10 @@ Task: $task
                             .filter { it.isNotBlank() }
                     )
                 }
-                .addOnFailureListener { cont.resumeWithException(it) }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "recognizeText failed (non-fatal): ${e.message}")
+                    cont.resume(emptyList())
+                }
         }
 
     // ── ML Kit-only fallback (Gemma not yet loaded) ────────────────────────
